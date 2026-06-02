@@ -1,70 +1,66 @@
 // figure out functions and stuff later, just get functions and stuff down
+use std::error::Error;
+use winit::application::ApplicationHandler;
+use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::window::{Window, WindowAttributes, WindowId};
+use log::*;
 
-let renderpass_attachments = [
-    vk::AttachementDescription {
-        format: base.surface_format.format,
-        samples: vk::SampleCountFlags::TYPE_1,
-        load_op: vk::AttachementLoadOp::CLEAR,
-        store_op: vk::AttachementStoreOp::STORE,
-        finaly_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-        ..Default::default()
-    },
-    vk::AttachementDescription {
-        format: vk::format::D16_UNORM,
-        samples: vk::SampleCountFlags::TYPE_1,
-        load_op: vk::AttachementLoadOp::CLEAR,
-        initial_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        ..Default::default()
-    },
-];
+#[path = "util/file.rs"]
+mod fill;
 
-let color_attachment_refs = [vk::AttachmentReference {
-    attachement: 0,
-    layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-}];
+fn main() -> Result<(), Box<dyn Error>> {
+    pretty_env_logger::init();
+    println!("Starting main function");
 
-let depth_attachment_refs = vk::AttachmentReference {
-    attachment: 1,
-    layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-};
+    let event_loop = EventLoop::new().expect("Failed to start event loop.");
 
-let dependencies = [vk::SubpassDependency {
-    src_subpass: vk::SUBPASS_EXTERNAL,
-    src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHEMENT_OUTPUT,
-    dst_access_mask: vk::AccessFlags::COLOR_ATTACHEMNT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-    dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-    ..Default::default()
-}];
+    event_loop.run_app(App::default())?;
+    
+    Ok(()) 
+}
 
-let subpass = vk::SubpassDescription::default()
-    .color_attachments(&color_attachment_refs)
-    .depth_stencil_attachment(&depth_attachment_ref)
-    .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
+#[derive(Default, Debug)]
+struct App {
+    window: Option<Box<dyn Window>>,
+}
 
-let renderpass_create_info = vk::RenderPassCreateInfo::default()
-    .attachments(&renderpass_attachments)
-    .subpasses(std::slice::from_ref(&subpass))
-    .dependencies(&dependencies);
+impl ApplicationHandler for App {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let window_attributes = WindowAttributes::default().with_title("M.A.V");
+        self.window = match event_loop.create_window(window_attributes) {
+            Ok(window) => Some(window),
+            Err(err) => {
+                error!("Error creating window: {err}");
+                event_loop.exit();
+                return;
+            },
+        }
+    }
 
-let renderpass = base
-    .device
-    .create_render_pass(&renderpass_create_info, None)
-    .unwrap();
+    fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        info!("{event:?}");
+        match event {
+            WindowEvent::CloseRequested => {
+                info!("Close was requested; stopping");
+                event_loop.exit();
+            },
+            WindowEvent::SurfaceResized(_) => {
+                self.window.as_ref().expect("Resize without a window").request_redraw();
+            },
+            WindowEvent::RedrawRequested => {
+                // Redraw the application here
+                let window = self.window.as_ref().expect("Redraw requested without a window");
 
-let framebuffers: Vec<vk::Framebuffer> = base
-    .present_image_views
-    .iter()
-    .map(|&present_image_view| {
-        let framebuffer_attachments = [present_image_view, base.depth_image_view];
-        let framebuffer_create_info = vk::FramebufferCreateInfo::default()
-            .renderpass(renderpass)
-            .attachments(&framebuffer_attachments)
-            .width(base.surface_resolution.width)
-            .height(base.surface_resolution.height)
-            .layers(1);
+                // Notify that youre about to redraw
+                window.pre_present_notify();
 
-        base.device
-            .create_framebuffer(&framebuffer_create_info, None)
-            .unwrap()
-    })
-    .collect();
+                //Draw, using temporary full color window for testing
+                fill::fill_window(window.as_ref());
+                //Can use window.request_redraw(); for continous loop
+            },
+            _ => (),
+        }
+    }
+}
+
