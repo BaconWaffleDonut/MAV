@@ -1,28 +1,49 @@
-// figure out functions and stuff later, just get functions and stuff down
-use std::error::Error;
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::window::{Window, WindowAttributes, WindowId};
+use std::{
+    cell::RefCell, 
+    error::Error, time::Instant};
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{
+        ActiveEventLoop,
+        EventLoop
+    },
+    window::{
+        Window,
+        WindowAttributes,
+        WindowId
+    },
+};
 use log::*;
+use ash::{
+    ext::debug_utils, 
+    khr::{
+        surface, 
+        swapchain},
+    vk, Device, Entry, Instance,
+};
 
 #[path = "util/file.rs"]
-mod fill;
+mod fill; // Only used for testing window creation
+mod engine_functions;
 
 fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
     println!("Starting main function");
 
     let event_loop = EventLoop::new().expect("Failed to start event loop.");
+    println!("Running event loop.");
 
+    engine_functions::test();
+    Engine::main();
     event_loop.run_app(App::default())?;
-    
+        
     Ok(()) 
 }
 
 #[derive(Default, Debug)]
 struct App {
-    window: Option<Box<dyn Window>>,
+    window: Option<Box<dyn Window>>
 }
 
 impl ApplicationHandler for App {
@@ -64,3 +85,52 @@ impl ApplicationHandler for App {
     }
 }
 
+//====================
+// Video Engine
+//====================
+
+// Constants and structures
+const MAX_FRAMES_IN_FLIGHT: usize = 3;
+
+type Vec2 = cgmath::Vector2<f32>;
+type Vec3 = cgmath::Vector3<f32>;
+type Mat4 = cgmath::Matrix4<f32>;
+
+struct Engine {
+    // Vulkan Stuff
+    entry: Entry,
+    instance: Instance,
+    data: EngineData,
+    device: Device,
+    frame: usize,
+    resized: bool,
+    start: Instant,
+    models: usize,
+}
+
+impl Engine {
+    fn main() {
+        println!("Starting Engine.")
+    }
+    // Create the Vulkan App
+    
+    // Render a frame
+
+    // Update Command Buffer
+
+    // Update Secondary Command Buffer
+
+    // Update Uniform Buffer Object
+
+    // Recreate the Swapchain
+
+    // Destroy the Vulkan app
+
+    // Destroy Swapchain
+
+    //
+}
+
+struct EngineData {
+
+}
