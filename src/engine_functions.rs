@@ -1,10 +1,42 @@
-use std::ffi::CStr;
-
-use ash::{Device, Entry, Instance, vk::{self, Window}};
+use std::{borrow::Cow, error::Error, ffi::{self, CStr}};
+use core::{ffi::c_char};
+use ash::{
+    vk, Device, Entry, Instance, 
+    ext::debug_utils, 
+};
+use log::{warn, info};
+use winit::{
+    event_loop::EventLoop,
+    raw_window_handle::HasDisplayHandle,
+    window::Window,
+    };
+use anyhow::{Result, anyhow};
 use crate::EngineData;
 
 const APP_NAME: &CStr = c"Testing";
 const ENGINE_NAME: &CStr = c"M.A.V.";
+const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
+
+/* #[derive(Debug, Clone, Copy)]
+struct QueueFamilyIndices {
+    graphics: u32,
+    present: u32,
+}
+
+impl QueueFamilyIndices {
+    unsafe fn get(instance: &Instance, data: &EngineData, physical_device: vk::PhysicalDevice) -> Result<Self> {
+        let properties = instance.get_physical_device_queue_family_properties(physical_device);
+        let graphics = properties
+            .iter()
+            .position(|p| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            .map(|i| i as u32);
+
+        let mut present = None;
+        for (index, properties) in properties.iter().enumerate() {
+            if instan
+        }
+    }
+} */
 
 pub fn test() {
     println!("Testing importation of functions.")
@@ -14,7 +46,9 @@ pub fn test() {
 // Instance
 //====================
 
-pub fn create_instance(window: &Window, entry: &Entry, data: &mut EngineData) -> Result<Instance> {
+pub unsafe fn create_instance(entry: &Entry, data: &mut EngineData) -> Result<Instance, Box<dyn Error>> {
+    let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
+    let event_loop = EventLoop::new()?;
     // Application Info
     let application_info = vk::ApplicationInfo::default()
         .application_name(APP_NAME)
@@ -24,30 +58,114 @@ pub fn create_instance(window: &Window, entry: &Entry, data: &mut EngineData) ->
         .api_version(vk::make_api_version(0, 1, 0, 0));
 
     // Layers
-    
+    let layer_names = [c"VK_LAYER_KHRONOS_validation"];
+    let layer_names_raw: Vec<*const c_char> = layer_names
+        .iter()
+        .map(|raw_name| raw_name.as_ptr())
+        .collect();
 
     // Extensions
-
+    let mut extension_names = 
+        ash_window::enumerate_required_extensions(event_loop.display_handle()?.as_raw())
+            .unwrap()
+            .to_vec();
+        extension_names.push(debug_utils::NAME.as_ptr());
 
     // Create Instance
+    let create_flags = vk::InstanceCreateFlags::default();
 
+    let mut create_info = vk::InstanceCreateInfo::default()
+        .application_info(&application_info)
+        .enabled_layer_names(&layer_names_raw)
+        .enabled_extension_names(&extension_names)
+        .flags(create_flags);
 
     // Debug Messenger
+
+    let mut debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+        .message_severity(
+            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+        )
+        .message_type(
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION  | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+        )
+        .pfn_user_callback(Some(vulkan_debug_callback));
+        
+    if VALIDATION_ENABLED {
+        create_info = create_info.push_next(&mut debug_info);
+    }
+
+    let instance: Instance = unsafe {entry
+        .create_instance(&create_info, None)
+        .expect("Failed to create Instace.")};
+    
+    let debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
+    let debug_call_back = unsafe{debug_utils_loader
+        .create_debug_utils_messenger(&debug_info, None)
+        .unwrap()};
+
+
+
+    Ok(instance)
 }
 
 // Debug Callback
+
+unsafe extern "system" fn vulkan_debug_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+    _user_data: *mut std::os::raw::c_void,
+) -> vk::Bool32 {
+    let callback_data = unsafe{ *p_callback_data};
+    let message_id_number = callback_data.message_id_number;
+
+    let message_id_name = unsafe { if callback_data.p_message_id_name.is_null() {
+        Cow::from("")
+    } else {
+        ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy()
+    }};
+
+    let message = unsafe { if callback_data.p_message.is_null() {
+        Cow::from("")
+    } else {
+        ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
+    }};
+
+    println!(
+        "{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
+    );
+
+    vk::FALSE
+}
 
 //====================
 // Physical Device
 //====================
 
-pub fn pick_physical_device(instance: &Instance, data: &mut EngineData) -> Result<()> {}
+pub unsafe fn pick_physical_device(instance: &Instance, data: &mut EngineData, physical_device: vk::PhysicalDevice) ->Result<()> {
+    for physical_device in instance.enumerate_physical_devices()? {
+        let properties = instance.get_physical_device_properties(physical_device);
 
-pub fn check_physical_device(instance: &Instance, data: &EngineData, physical_device: vk::PhysicalDevice) -> Result<()> {}
+        if let Err(error) = check_physical_device(instance, data, physical_device) {
+            warn!("Skipping physical device {:?}: {}", properties.device_name, error);
+        } else {
+            info!("Selected phyiscal device {:?}.", properties.device_name);
+            data.physical_device = physical_device;
+            data.msaa_samples = get_msaa_samples(instance, data);
+            return Ok(());
+        }
+    }
+    Err(anyhow!("Failed to find suitable physical device."))
+}
+
+/* pub fn check_physical_device(instance: &Instance, data: &EngineData, physical_device: vk::PhysicalDevice) -> Result<()> {
+    QueueFamilyIndices::get(instance, data, physical_device)
+} */
 
 pub fn check_physical_device_extensions(instance: &Instance, physical_device: vk::PhysicalDevice) -> Result<()> {}
 
-pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCountFlags {}
+pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCountFlags() {}
 
 //====================
 // Logical Device

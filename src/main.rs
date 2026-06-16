@@ -16,10 +16,6 @@ use winit::{
 };
 use log::*;
 use ash::{
-    ext::debug_utils, 
-    khr::{
-        surface, 
-        swapchain},
     vk, Device, Entry, Instance,
 };
 
@@ -96,6 +92,14 @@ type Vec2 = cgmath::Vector2<f32>;
 type Vec3 = cgmath::Vector3<f32>;
 type Mat4 = cgmath::Matrix4<f32>;
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct Vertex {
+    pos: Vec3,
+    color: Vec3,
+    tex_coord: Vec2,
+}
+
 struct Engine {
     // Vulkan Stuff
     entry: Entry,
@@ -131,6 +135,83 @@ impl Engine {
     //
 }
 
+#[derive(Clone, Debug, Default)]
 struct EngineData {
+    // Debug
+    messenger: vk::DebugUtilsMessengerEXT,
+    debug_call_back: vk::DebugUtilsMessengerEXT,
 
+    // Surface
+    surface: vk::SurfaceKHR,
+
+    // Physical & Logical Device
+    physical_device: vk::PhysicalDevice,
+    msaa_samples: vk::SampleCountFlags,
+    graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
+
+    // Swapchain
+    swapchain_format: vk::Format,
+    swapchain_extent: vk::Extent2D,
+    swapchain: vk::SwapchainKHR,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_image_views: Vec<vk::ImageView>,
+
+    // Pipeline
+    render_pass: vk::RenderPass,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
+
+    // Framebuffers
+    framebuffers: Vec<vk::Framebuffer>,
+
+    // Command Pool
+    command_pool: vk::CommandPool,
+
+    // Color
+    color_image: vk::Image,
+    color_image_memory: vk::DeviceMemory,
+    color_image_view: vk::ImageView,
+
+    // Depth
+    depth_image: vk::Image,
+    depth_image_memory: vk::DeviceMemory,
+    depth_image_view: vk::ImageView,
+
+    // Texture
+    mip_levels: u32,
+    texture_image: vk::Image,
+    texture_image_memory: vk::DeviceMemory,
+    texture_image_view: vk::ImageView,
+    texture_sampler: vk::Sampler,
+
+    // Model
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+
+    // Buffers
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
+    index_buffer: vk::Buffer,
+    index_buffer_memory: vk::DeviceMemory,
+    uniform_buffers: Vec<vk::Buffer>,
+    uniform_buffers_memory: Vec<vk::DeviceMemory>,
+
+    // Descriptors
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_sets: Vec<vk::DescriptorSet>,
+
+    // Command Buffers
+    command_pools: Vec<vk::CommandPool>,
+    command_buffers: Vec<vk::CommandBuffer>,
+    secondary_command_buffers: Vec<Vec<vk::CommandBuffer>>,
+
+    // Sync Objects
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    in_flight_fences: Vec<vk::Fence>,
+    images_in_flight: Vec<vk::Fence>,
+
+    // MISC ORG LATER
 }
