@@ -16,7 +16,7 @@ use winit::{
 };
 use log::*;
 use ash::{
-    vk, Device, Entry, Instance,
+    Device, Entry, Instance, khr::surface, vk
 };
 
 #[path = "util/file.rs"]
@@ -149,6 +149,7 @@ struct EngineData {
     msaa_samples: vk::SampleCountFlags,
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
+    device_extension_names_raw: vk::PhysicalDeviceFeatures,
 
     // Swapchain
     swapchain_format: vk::Format,

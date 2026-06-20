@@ -1,52 +1,70 @@
-use std::{borrow::Cow, error::Error, ffi::{self, CStr}};
+use std::{borrow::Cow, collections::{HashMap, HashSet}, error::Error, ffi::{self, CStr}};
 use core::{ffi::c_char};
 use ash::{
-    vk, Device, Entry, Instance, 
-    ext::debug_utils, 
+    Device, Entry, Instance, ext::debug_utils, khr::surface, vk::{self, PhysicalDevice} 
 };
-use log::{warn, info};
 use winit::{
     event_loop::EventLoop,
-    raw_window_handle::HasDisplayHandle,
+    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::Window,
     };
-use anyhow::{Result, anyhow};
+use anyhow::{Ok, Result, anyhow};
+use thiserror::Error;
 use crate::EngineData;
 
 const APP_NAME: &CStr = c"Testing";
 const ENGINE_NAME: &CStr = c"M.A.V.";
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 
-/* #[derive(Debug, Clone, Copy)]
+pub fn test() -> Result<()> {
+    if VALIDATION_ENABLED {
+    println!("Testing importation of functions.")
+    } else {
+        None.expect("Failed to do nothing...")
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
 struct QueueFamilyIndices {
-    graphics: u32,
     present: u32,
+    graphics: u32,
 }
 
 impl QueueFamilyIndices {
-    unsafe fn get(instance: &Instance, data: &EngineData, physical_device: vk::PhysicalDevice) -> Result<Self> {
-        let properties = instance.get_physical_device_queue_family_properties(physical_device);
+    unsafe fn get(entry: &Entry, instance: &Instance, data: &EngineData, physical_device: vk::PhysicalDevice, window: &dyn Window) -> Result<Self> {
+        let event_loop = EventLoop::new()?;
+        let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
+        let surface_loader = surface::Instance::new(&entry, &instance);
+        let properties = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
         let graphics = properties
             .iter()
             .position(|p| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
             .map(|i| i as u32);
-
         let mut present = None;
         for (index, properties) in properties.iter().enumerate() {
-            if instan
+            if unsafe { surface_loader.get_physical_device_surface_support(physical_device, index as u32, surface)? } {
+                present = Some(index as u32);
+                break;
+            }
+        }
+        if let (Some(graphics), Some(presnt)) = (graphics, present) {
+            Ok(Self {graphics, present })
+        } else {
+            Err(anyhow!(SuitabilityError("Missing required queue families.")))
         }
     }
-} */
-
-pub fn test() {
-    println!("Testing importation of functions.")
 }
+
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct SuitabilityError(pub &'static str);
 
 //====================
 // Instance
 //====================
 
-pub unsafe fn create_instance(entry: &Entry, data: &mut EngineData) -> Result<Instance, Box<dyn Error>> {
+pub unsafe fn create_instance(data: &mut EngineData) -> Result<Instance, Box<dyn Error>> {
     let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
     let event_loop = EventLoop::new()?;
     // Application Info
@@ -108,6 +126,7 @@ pub unsafe fn create_instance(entry: &Entry, data: &mut EngineData) -> Result<In
 
     Ok(instance)
 }
+// Fix error expectation in resulting instace.
 
 // Debug Callback
 
@@ -143,35 +162,74 @@ unsafe extern "system" fn vulkan_debug_callback(
 // Physical Device
 //====================
 
-pub unsafe fn pick_physical_device(instance: &Instance, data: &mut EngineData, physical_device: vk::PhysicalDevice) ->Result<()> {
-    for physical_device in instance.enumerate_physical_devices()? {
-        let properties = instance.get_physical_device_properties(physical_device);
+pub unsafe fn pick_physical_device(instance: &Instance, entry: &Entry, window: &dyn Window) -> Result<(u32, PhysicalDevice)> {
+    // Create surface and event loop to get surface requirements.
+    let event_loop = EventLoop::new()?;
+    let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
+    let surface_loader = surface::Instance::new(&entry, &instance);
 
-        if let Err(error) = check_physical_device(instance, data, physical_device) {
-            warn!("Skipping physical device {:?}: {}", properties.device_name, error);
-        } else {
-            info!("Selected phyiscal device {:?}.", properties.device_name);
-            data.physical_device = physical_device;
-            data.msaa_samples = get_msaa_samples(instance, data);
-            return Ok(());
-        }
-    }
-    Err(anyhow!("Failed to find suitable physical device."))
-}
+    // Select and check physical device.
+    let physical_devices = unsafe{instance.enumerate_physical_devices().expect("Physical Device Error")};
+    let (physical_device, queue_family_index) = physical_devices
+        .iter()
+        .find_map(|physical_device| {
+            unsafe { instance
+                .get_physical_device_queue_family_properties(*physical_device)
+                .iter()
+                .enumerate()
+                .find_map(|(index, info)| {
+                    let supports_graphics_and_surface = 
+                        info.queue_flags.contains(vk::QueueFlags::GRAPHICS) && surface_loader.get_physical_device_surface_support(*physical_device, index as u32, surface).unwrap();
+                    if supports_graphics_and_surface {
+                        Some((*physical_device, index))
+                    } else {
+                        None
+                    }
+                }) }
+        }).expect("Failed to find suitable phyiscal device.");
 
-/* pub fn check_physical_device(instance: &Instance, data: &EngineData, physical_device: vk::PhysicalDevice) -> Result<()> {
-    QueueFamilyIndices::get(instance, data, physical_device)
+        let queue_family_index = queue_family_index as u32;
+
+        Ok((queue_family_index, physical_device))
+ }
+
+/* pub fn check_physical_device_extensions() -> Result<([i8], PhysicalDeviceFeatures/*figure out how to pass out features*/)> {
+    let device_extension_names_raw = [
+        swapchain::NAME.as_ptr(),
+    ];
+    let features = vk::PhysicalDeviceFeatures {
+        shader_clip_distance: 1,
+        ..Default::default()
+    };
+    Ok((device_extension_names_raw, features))
 } */
 
-pub fn check_physical_device_extensions(instance: &Instance, physical_device: vk::PhysicalDevice) -> Result<()> {}
-
-pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCountFlags() {}
+pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCountFlags {
+    let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
+    let counts = properties.limits.framebuffer_color_sample_counts & properties.limits.framebuffer_depth_sample_counts;
+    let sample_counts = [
+        vk::SampleCountFlags::TYPE_64,
+        vk::SampleCountFlags::TYPE_32,
+        vk::SampleCountFlags::TYPE_16,
+        vk::SampleCountFlags::TYPE_8,
+        vk::SampleCountFlags::TYPE_4,
+        vk::SampleCountFlags::TYPE_2,
+    ]
+    .iter()
+    .cloned()
+    .find(|c| counts.contains(*c))
+    .unwrap_or(vk::SampleCountFlags::TYPE_1);
+    return sample_counts;
+}
 
 //====================
 // Logical Device
 //====================
 
-pub fn create_logical_device(entry: &Entry, instance: &Instance, data: &mut EngineData) -> Result<Device> {}
+pub fn create_logical_device(entry: &Entry, instance: &Instance, data: &mut EngineData) -> Result<Device> {
+    // Queue Create Info
+    // Need to get indices... fus9nf8
+}
 
 //====================
 // Swapchain
