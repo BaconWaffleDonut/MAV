@@ -143,6 +143,7 @@ struct EngineData {
 
     // Surface
     surface: vk::SurfaceKHR,
+    surface_format: vk::SurfaceFormatKHR,
 
     // Physical & Logical Device
     physical_device: vk::PhysicalDevice,
@@ -213,4 +214,8 @@ struct EngineData {
     render_finished_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
     images_in_flight: Vec<vk::Fence>,
+
+    // MISC
+    window_height: u32,
+    window_width: u32,
 }

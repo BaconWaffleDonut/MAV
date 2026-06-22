@@ -94,7 +94,7 @@ pub struct SuitabilityError(pub &'static str);
 
 pub unsafe fn create_instance(data: &mut EngineData) -> Result<Instance> {
     let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
-    let event_loop = EventLoop::new()?;
+    let event_loop = Utils::event_loop().expect("Failed to fetch event loop.");
     // Application Info
     let application_info = vk::ApplicationInfo::default()
         .application_name(APP_NAME)
@@ -190,9 +190,9 @@ unsafe extern "system" fn vulkan_debug_callback(
 //====================
 
 pub unsafe fn pick_physical_device(instance: &Instance, entry: &Entry, window: &dyn Window) -> Result<(u32, PhysicalDevice)> {
-    // Create surface and event loop to get surface requirements.
+    // Import surface and surface loader to get requirements. 
     let surface = Utils::surface(&entry, window, &instance).expect("Failed fetching surface.");
-    let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed fetchging surface loader.");
+    let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed fetching surface loader.");
 
     // Select and check physical device.
     let physical_devices = unsafe{instance.enumerate_physical_devices().expect("Physical Device Error")};
@@ -296,21 +296,107 @@ pub fn create_logical_device(entry: &Entry, instance: &Instance, data: &mut Engi
 // Swapchain
 //====================
 
-pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Device, data: &mut EngineData, entry: &Entry, physical_device: vk::PhysicalDevice, ) -> Result<()> {
+pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Device, data: &mut EngineData, entry: &Entry) -> Result<()> {
+    // Setup
     let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed fetching surface loader.");
-    let indices = unsafe { QueueFamilyIndices::get(entry, instance, physical_device, window) }?;
+    let indices = unsafe { QueueFamilyIndices::get(entry, instance, data.physical_device, window) }?;
     let surface_capabilites = unsafe { surface_loader 
-        .get_physical_device_surface_capabilities(physical_device, data.surface)
+        .get_physical_device_surface_capabilities(data.physical_device, data.surface).unwrap() };
+    data.surface_format = unsafe {
+        surface_loader.get_physical_device_surface_formats(data.physical_device, data.surface).unwrap()[0]
+    };
+    let mut image_count = surface_capabilites.min_image_count + 1;
+    if surface_capabilites.max_image_count != 0 && image_count > surface_capabilites.max_image_count {
+        image_count = surface_capabilites.max_image_count;
+    } else {
+        vk::SharingMode::EXCLUSIVE;
+    };
+    let surface_resolution = match surface_capabilites.current_extent.width {
+        u32::MAX => vk::Extent2D {
+            width: data.window_width,
+            height: data.window_height,
+        },
+        _ => surface_capabilites.current_extent,
+    };
+    let pre_transform = if surface_capabilites
+        .supported_transforms
+        .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
+        {
+            vk::SurfaceTransformFlagsKHR::IDENTITY
+        } else {
+            surface_capabilites.current_transform
+        };
+    let present_modes = unsafe { surface_loader
+        .get_physical_device_surface_present_modes(data.physical_device, data.surface)
         .unwrap() };
+    let present_mode = present_modes
+        .iter()
+        .cloned()
+        .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
+        .unwrap_or(vk::PresentModeKHR::FIFO);
+    let mut queue_family_indices = vec![];
+    let image_sharing_mode = if indices.graphics != indices.present {
+        queue_family_indices.push(indices.graphics);
+        queue_family_indices.push(indices.present);
+        vk::SharingMode::CONCURRENT
+    } else {
+        vk::SharingMode::EXCLUSIVE
+    };
+    let swapchain_loader = swapchain::Device::new(&instance, &device);
+
+    // Create
+    let info =  vk::SwapchainCreateInfoKHR::default()
+        .surface(data.surface)
+        .min_image_count(image_count)
+        .image_format(data.surface_format.format)
+        .image_color_space(data.surface_format.color_space)
+        .image_extent(surface_resolution)
+        .image_array_layers(1)
+        .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        .image_sharing_mode(image_sharing_mode)
+        .queue_family_indices(&queue_family_indices)
+        .pre_transform(pre_transform)
+        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+        .present_mode(present_mode)
+        .clipped(true)
+        .old_swapchain(vk::SwapchainKHR::null());
+
+    data.swapchain = unsafe { swapchain_loader.create_swapchain(&info, None).unwrap() };
+    data.swapchain_images = unsafe {swapchain_loader.get_swapchain_images(data.swapchain)?};
+
+    Ok(()) 
+
 }
 
-pub fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {}
+unsafe fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> Result<()> {
+    let present_image_views: Vec<vk::ImageView> = data.swapchain_images
+        .iter()
+        .map(|&image| {
+            let info = vk::ImageViewCreateInfo::default()
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(data.surface_format.format)
+                .components(vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::R,
+                    g: vk::ComponentSwizzle::G,
+                    b: vk::ComponentSwizzle::B,
+                    a: vk::ComponentSwizzle::A,
+                })
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image(image);
+                unsafe { device.create_image_view(&info, None).unwrap() }
+        })
+        .collect();
+        
+    data.swapchain_image_views = present_image_views;
 
-pub fn get_swapchain_present_mode(present_modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {}
-
-pub fn get_swapchain_extent(window: &dyn Window, capabilities: vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {}
-
-pub fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> Result<()> {}
+    Ok(())
+}
 
 //====================
 // Pipeline
