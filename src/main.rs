@@ -213,6 +213,4 @@ struct EngineData {
     render_finished_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
     images_in_flight: Vec<vk::Fence>,
-
-    // MISC ORG LATER
 }

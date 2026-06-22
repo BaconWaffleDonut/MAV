@@ -1,7 +1,7 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}, error::Error, ffi::{self, CStr}};
+use std::{borrow::Cow, collections::{HashMap, HashSet}, ffi::{self, CStr}, ops::Index};
 use core::{ffi::c_char};
 use ash::{
-    Device, Entry, Instance, ext::debug_utils, khr::surface, vk::{self, PhysicalDevice} 
+    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, vk::{self, PhysicalDevice, SurfaceKHR} 
 };
 use winit::{
     event_loop::EventLoop,
@@ -15,12 +15,13 @@ use crate::EngineData;
 const APP_NAME: &CStr = c"Testing";
 const ENGINE_NAME: &CStr = c"M.A.V.";
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
+const VALIDATION_LAYERS: [&CStr; 1] = [c"VK_LAYER_KHRONOS_validation"];
 
 pub fn test() -> Result<()> {
     if VALIDATION_ENABLED {
-    println!("Testing importation of functions.")
+        println!("Validation enabled. Importation successful")
     } else {
-        None.expect("Failed to do nothing...")
+        println!("Validation not enabled. Importation successful")
     }
     Ok(())
 }
@@ -32,7 +33,7 @@ struct QueueFamilyIndices {
 }
 
 impl QueueFamilyIndices {
-    unsafe fn get(entry: &Entry, instance: &Instance, data: &EngineData, physical_device: vk::PhysicalDevice, window: &dyn Window) -> Result<Self> {
+    unsafe fn get(entry: &Entry, instance: &Instance, physical_device: vk::PhysicalDevice, window: &dyn Window) -> Result<Self> {
         let event_loop = EventLoop::new()?;
         let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
         let surface_loader = surface::Instance::new(&entry, &instance);
@@ -48,11 +49,38 @@ impl QueueFamilyIndices {
                 break;
             }
         }
-        if let (Some(graphics), Some(presnt)) = (graphics, present) {
+        if let (Some(graphics), Some(present)) = (graphics, present) {
             Ok(Self {graphics, present })
         } else {
             Err(anyhow!(SuitabilityError("Missing required queue families.")))
         }
+    }
+}
+
+/* fn utils(entry: &Entry, instance: &Instance, window: &dyn Window) -> Result<()> {
+    let event_loop = EventLoop::new()?;
+    let surface_loader = surface::Instance::new(&entry, &instance);
+    let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
+
+    Ok(())
+} */
+
+struct Utils {
+}
+
+impl Utils {
+    pub fn event_loop() -> Result<EventLoop> {
+        let event_loop = EventLoop::new()?;
+        Ok(event_loop)
+    }
+    pub fn surface(entry: &Entry, window: &dyn Window, instance: &Instance,) -> Result<SurfaceKHR> {
+        let event_loop = Utils::event_loop().expect("Failed to call event loop");
+        let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
+        Ok(surface)
+    }
+    pub fn surface_loader(entry: &Entry, instance: &Instance) -> Result<surface::Instance> {
+        let surface_loader = surface::Instance::new(&entry, &instance);
+        Ok(surface_loader)
     }
 }
 
@@ -64,7 +92,7 @@ pub struct SuitabilityError(pub &'static str);
 // Instance
 //====================
 
-pub unsafe fn create_instance(data: &mut EngineData) -> Result<Instance, Box<dyn Error>> {
+pub unsafe fn create_instance(data: &mut EngineData) -> Result<Instance> {
     let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
     let event_loop = EventLoop::new()?;
     // Application Info
@@ -76,7 +104,7 @@ pub unsafe fn create_instance(data: &mut EngineData) -> Result<Instance, Box<dyn
         .api_version(vk::make_api_version(0, 1, 0, 0));
 
     // Layers
-    let layer_names = [c"VK_LAYER_KHRONOS_validation"];
+    let layer_names = VALIDATION_LAYERS;
     let layer_names_raw: Vec<*const c_char> = layer_names
         .iter()
         .map(|raw_name| raw_name.as_ptr())
@@ -126,7 +154,6 @@ pub unsafe fn create_instance(data: &mut EngineData) -> Result<Instance, Box<dyn
 
     Ok(instance)
 }
-// Fix error expectation in resulting instace.
 
 // Debug Callback
 
@@ -164,9 +191,8 @@ unsafe extern "system" fn vulkan_debug_callback(
 
 pub unsafe fn pick_physical_device(instance: &Instance, entry: &Entry, window: &dyn Window) -> Result<(u32, PhysicalDevice)> {
     // Create surface and event loop to get surface requirements.
-    let event_loop = EventLoop::new()?;
-    let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
-    let surface_loader = surface::Instance::new(&entry, &instance);
+    let surface = Utils::surface(&entry, window, &instance).expect("Failed fetching surface.");
+    let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed fetchging surface loader.");
 
     // Select and check physical device.
     let physical_devices = unsafe{instance.enumerate_physical_devices().expect("Physical Device Error")};
@@ -203,6 +229,7 @@ pub unsafe fn pick_physical_device(instance: &Instance, entry: &Entry, window: &
     };
     Ok((device_extension_names_raw, features))
 } */
+// Rebuild this section now that I managed to implement QueueFamilyIndices
 
 pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCountFlags {
     let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
@@ -226,22 +253,62 @@ pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCou
 // Logical Device
 //====================
 
-pub fn create_logical_device(entry: &Entry, instance: &Instance, data: &mut EngineData) -> Result<Device> {
+pub fn create_logical_device(entry: &Entry, instance: &Instance, data: &mut EngineData, window: &dyn Window, physical_device: vk::PhysicalDevice) -> Result<Device> {
     // Queue Create Info
-    // Need to get indices... fus9nf8
+    let indices = unsafe { QueueFamilyIndices::get(&entry, &instance, physical_device, window)? };
+    let mut unique_indices = HashSet::new();
+    unique_indices.insert(indices.graphics);
+    unique_indices.insert(indices.present);
+
+    let queue_priorities = &[1.0];
+    let queue_infos = unique_indices
+        .iter()
+        .map(|i| {
+            vk::DeviceQueueCreateInfo::default()
+                .queue_family_index(*i) 
+                .queue_priorities(queue_priorities) 
+        }).collect::<Vec<_>>();
+
+    // Extensions
+    let extensions = [swapchain::NAME.as_ptr()];
+    
+    // Features
+    let features  = vk::PhysicalDeviceFeatures {
+        shader_clip_distance: 1,
+        ..Default::default()
+    };
+
+    // Create
+
+    let create_info = vk::DeviceCreateInfo::default()
+        .queue_create_infos(std::slice::from_ref(&queue_infos.index(1)))
+        .enabled_extension_names(&extensions)
+        .enabled_features(&features);
+    
+    let device = unsafe { instance
+        .create_device(physical_device, &create_info, None)
+        .unwrap() };
+
+    Ok(device)
 }
 
 //====================
 // Swapchain
 //====================
 
-pub fn create_swapchain(window: &Window, instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Device, data: &mut EngineData, entry: &Entry, physical_device: vk::PhysicalDevice, ) -> Result<()> {
+    let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed fetching surface loader.");
+    let indices = unsafe { QueueFamilyIndices::get(entry, instance, physical_device, window) }?;
+    let surface_capabilites = unsafe { surface_loader 
+        .get_physical_device_surface_capabilities(physical_device, data.surface)
+        .unwrap() };
+}
 
 pub fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {}
 
 pub fn get_swapchain_present_mode(present_modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {}
 
-pub fn get_swapchain_extent(window: &Window, capabilities: vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {}
+pub fn get_swapchain_extent(window: &dyn Window, capabilities: vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {}
 
 pub fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> Result<()> {}
 
