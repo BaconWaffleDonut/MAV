@@ -722,7 +722,34 @@ pub fn create_command_pool(instance: &Instance, device: &Device, data: &mut Engi
 // Color Objects
 //====================
 
-pub fn create_color_objects(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_color_objects(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
+    // Image + Image Memory
+    let (color_image, color_image_memory) = create_image(
+        instance, 
+        device, 
+        data, 
+        data.swapchain_extent.width, 
+        data.swapchain_extent.height, 
+        1, 
+        data.msaa_samples, 
+        data.swapchain_format, 
+        vk::ImageTiling::OPTIMAL, 
+        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT, 
+        vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+
+    data.color_image = color_image;
+    data.color_image_memory = color_image_memory;
+
+    // Image View
+    data.color_image_view = create_image_view(
+        device, 
+        data.color_image, 
+        data.swapchain_format, 
+        vk::ImageAspectFlags::COLOR, 
+        1)?;
+    
+    Ok(())
+}
 
 //====================
 // Depth Objects
@@ -794,9 +821,37 @@ pub fn copy_buffer(device: &Device, data: &EngineData, source: vk::Buffer, desti
 // Shared Images
 //====================
 
-pub fn create_image(instance: &Instance, device: &Device, data: &EngineData, width: u32, height: u32, mip_levels: u32, samples: vk::SampleCountFlags, format: vk::Format, tiling: vk::ImageTiling, usage: vk::ImageUsageFlags, properties: vk::MemoryPropertyFlags) -> Result<vk::Image, vk::DeviceMemory> {}
+pub fn create_image(instance: &Instance, device: &Device, data: &EngineData, width: u32, height: u32, mip_levels: u32, samples: vk::SampleCountFlags, format: vk::Format, tiling: vk::ImageTiling, usage: vk::ImageUsageFlags, properties: vk::MemoryPropertyFlags) -> Result<(vk::Image, vk::DeviceMemory)> {
+    // Image
+    let info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
+        .mip_levels(mip_levels)
+        .array_layers(1)
+        .format(format)
+        .tiling(tiling)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .samples(samples);
+    let image = unsafe { device.create_image(&info, None).expect("Failed to create image.")};
 
-pub fn create_image_view(device: &Device, image: vk::Image, format: vk::Format, aspects: vk::ImageAspectFlags, mip_levels: u32) -> Result<vk::Image> {}
+    // Memory 
+    let requirements = unsafe { device.get_image_memory_requirements(image) };
+    let info = vk::MemoryAllocateInfo::default()
+        .allocation_size(requirements.size)
+        .memory_type_index(get_memory_type_index(instance, data, properties, requirements).expect("Failed to create info for memory allocation."));
+    let image_memory = unsafe { device.allocate_memory(&info, None).expect("Failed to allocate memory for image memory.")};
+    (unsafe { device.bind_image_memory(image, image_memory, 0) }).expect("Failed to bind image memory.");
+    Ok((image, image_memory))
+
+}
+
+pub fn create_image_view(device: &Device, image: vk::Image, format: vk::Format, aspects: vk::ImageAspectFlags, mip_levels: u32) -> Result<vk::ImageView> {}
 
 pub fn transition_image_layout(device: &Device, data: &EngineData, image: vk::Image, format: vk::Format, old_layout: vk::ImageLayout, new_layout: vk::ImageLayout, mip_levels: u32) -> Result<()> {}
 
