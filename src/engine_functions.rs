@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}, ffi::{self, CStr}, ops::Index};
+use std::{borrow::Cow, collections::HashSet, ffi::{self, CStr}, ops::Index};
 use core::{ffi::c_char};
 use ash::{
     Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, vk::{self, PhysicalDevice, SurfaceKHR} 
@@ -57,14 +57,6 @@ impl QueueFamilyIndices {
     }
 }
 
-/* fn utils(entry: &Entry, instance: &Instance, window: &dyn Window) -> Result<()> {
-    let event_loop = EventLoop::new()?;
-    let surface_loader = surface::Instance::new(&entry, &instance);
-    let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
-
-    Ok(())
-} */
-
 struct Utils {
 }
 
@@ -92,7 +84,7 @@ pub struct SuitabilityError(pub &'static str);
 // Instance
 //====================
 
-pub unsafe fn create_instance(data: &mut EngineData) -> Result<Instance> {
+pub unsafe fn create_instance() -> Result<Instance> {
     let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
     let event_loop = Utils::event_loop().expect("Failed to fetch event loop.");
     // Application Info
@@ -253,7 +245,7 @@ pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCou
 // Logical Device
 //====================
 
-pub fn create_logical_device(entry: &Entry, instance: &Instance, data: &mut EngineData, window: &dyn Window, physical_device: vk::PhysicalDevice) -> Result<Device> {
+pub fn create_logical_device(entry: &Entry, instance: &Instance, window: &dyn Window, physical_device: vk::PhysicalDevice) -> Result<Device> {
     // Queue Create Info
     let indices = unsafe { QueueFamilyIndices::get(&entry, &instance, physical_device, window)? };
     let mut unique_indices = HashSet::new();
@@ -402,7 +394,78 @@ unsafe fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -
 // Pipeline
 //====================
 
-pub fn create_render_pass(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_render_pass(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
+    // Attachements
+    let color_attachment = vk::AttachmentDescription::default()
+        .format(data.swapchain_format)
+        .samples(data.msaa_samples)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    let depth_stencil_attachement = vk::AttachmentDescription::default()
+        .format(get_depth_format(instance, data)?)
+        .samples(data.msaa_samples)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    let color_resolve_attachment = vk::AttachmentDescription::default()
+        .format(data.swapchain_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+    
+    // Subpasses
+    let color_attachment_ref = vk::AttachmentReference::default()
+        .attachment(0)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    let depth_stencil_attachment_ref = vk::AttachmentReference::default()
+        .attachment(1)
+        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    let color_resolve_attachment_ref = vk::AttachmentReference::default()
+        .attachment(2)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+    let color_attachments = &[color_attachment_ref];
+    let resolve_attachments = &[color_attachment_ref];
+    let subpass = vk::SubpassDescription::default()
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .color_attachments(color_attachments)
+        .depth_stencil_attachment(&depth_stencil_attachment_ref)
+        .resolve_attachments(resolve_attachments);
+
+    // Dependencies
+    let dependency = vk::SubpassDependency::default()
+        .src_subpass(vk::SUBPASS_EXTERNAL)
+        .dst_subpass(0)
+        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE);
+    
+    // Create
+    let attachments = &[color_attachment, depth_stencil_attachement, color_resolve_attachment];
+    let subpasses = &[subpass];
+    let dependencies = &[dependency];
+    let info = vk::RenderPassCreateInfo::default()
+        .attachments(attachments)
+        .subpasses(subpasses)
+        .dependencies(dependencies);
+
+    data.render_pass = unsafe { device.create_render_pass(&info, None)? };
+    
+    Ok(())
+
+}
 
 pub fn create_descriptor_set_layout(device: &Device, data: &mut EngineData) -> Result<()> {}
 
