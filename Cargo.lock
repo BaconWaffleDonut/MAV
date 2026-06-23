@@ -761,6 +761,7 @@ dependencies = [
  "pretty_env_logger",
  "softbuffer",
  "thiserror 2.0.18",
+ "tobj",
  "winit",
 ]
 
@@ -1470,6 +1471,15 @@ dependencies = [
  "libloading",
  "pkg-config",
  "tracing",
+]
+
+[[package]]
+name = "tobj"
+version = "4.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da83817ac7401436633efc35c19edae9f326fa741fae775a1caa406de9db07c"
+dependencies = [
+ "ahash",
 ]
 
 [[package]]

@@ -1,13 +1,12 @@
-use std::{borrow::Cow, collections::HashSet, ffi::{self, CStr}, ops::Index, io::Cursor};
-use core::{ffi::c_char, num};
+use std::{borrow::Cow, collections::{HashMap, HashSet}, ffi::{self, CStr}, fs::File, io::{BufReader, Cursor}, ops::Index};
+use core::ffi::c_char;
 use ash::{
-    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, PhysicalDevice, SurfaceKHR} 
-};
+    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, PhysicalDevice, SurfaceKHR} };
+use cgmath::{vec3, vec2};
 use winit::{
     event_loop::EventLoop,
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
-    window::Window,
-    };
+    window::Window,};
 use anyhow::{Ok, Result, anyhow};
 use thiserror::Error;
 use crate::EngineData;
@@ -755,29 +754,343 @@ pub fn create_color_objects(instance: &Instance, device: &Device, data: &mut Eng
 // Depth Objects
 //====================
 
-pub fn create_depth_objects(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_depth_objects(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
+    // Image + Image Memory
+    let format = get_depth_format(instance, data)?;
+    let (depth_image, depth_image_memory) = create_image(
+        instance, 
+        device, 
+        data, 
+        data.swapchain_extent.width, 
+        data.swapchain_extent.height, 
+        1, 
+        data.msaa_samples, 
+        format, 
+        vk::ImageTiling::OPTIMAL, 
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT, 
+        vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
 
-pub fn get_depth_format(instance: &Instance, data: &EngineData) -> Result<vk::Format> {}
+        data.depth_image = depth_image;
+        data.depth_image_memory = depth_image_memory;
 
-pub fn get_supported_format(instance: &Instance, data: &EngineData, candidates: &[vk::Format], tiling: vk::ImageTiling, features: vk::FormatFeatureFlags) -> Result<vk::Format> {}
+        data.depth_image_view = create_image_view(device, data.depth_image, format, vk::ImageAspectFlags::DEPTH, 1)?;
+
+        Ok(())
+}
+
+pub fn get_depth_format(instance: &Instance, data: &EngineData) -> Result<vk::Format> {
+    let candidates = &[
+        vk::Format::D32_SFLOAT,
+        vk::Format::D32_SFLOAT_S8_UINT,
+        vk::Format::D24_UNORM_S8_UINT,
+    ];
+
+    get_supported_format(
+        instance, 
+        data, 
+        candidates, 
+        vk::ImageTiling::OPTIMAL, 
+        vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+}
+
+pub fn get_supported_format(instance: &Instance, data: &EngineData, candidates: &[vk::Format], tiling: vk::ImageTiling, features: vk::FormatFeatureFlags) -> Result<vk::Format> {
+    candidates
+        .iter()
+        .cloned()
+        .find(|f| {
+            let properties = unsafe { instance.get_physical_device_format_properties(data.physical_device, *f) };
+            match tiling {
+                vk::ImageTiling::LINEAR => properties.linear_tiling_features.contains(features),
+                vk::ImageTiling::OPTIMAL => properties.optimal_tiling_features.contains(features),
+                _ => false,
+            }   
+        })
+        .ok_or_else(|| anyhow!("Failed to find supported format!"))
+}
 
 //====================
 // Texture
 //====================
 
-pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
+    // Load 
+    let image = File::open("../resources/viking_room.png")?;
+    let decoder = png::Decoder::new(image);
+    
+    let mut reader = decoder.read_info()?;
+    let mut pixels = vec![0; reader.info().raw_bytes()];
+    reader.next_frame(&mut pixels)?;
+    
+    let size = reader.info().raw_bytes() as u64;
+    let (width, height) = reader.info().size();
+    data.mip_levels = (width.max(height) as f32).log2().floor() as u32 + 1;
 
-pub fn generate_mipmaps(instance: &Instance, device: &Device, data: &EngineData, image: vk::Image, format: vk::Format, width: u32, height: u32, mip_levels: u32) -> Result<()> {}
+    if width != 1024 || height != 1024 || reader.info().color_type != png::ColorType::Rgba {
+        panic!("Invalid texture image used.")
+    }
 
-pub fn create_texture_image_view(device: &Device, data: &mut EngineData) -> Result<()> {}
+    // Create Staging
+    let (staging_buffer, staging_buffer_memory) = create_buffer(
+        instance, 
+        device, 
+        data, 
+        size, 
+        vk::BufferUsageFlags::TRANSFER_SRC, 
+        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
 
-pub fn create_texture_sampler(device: &Device, data: &mut EngineData) -> Result<()> {}
+    // Copy Stating
+    let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
+    memcpy(pixels.as_ptr(), memory.cast(), pixels.len());
+    unsafe { device.unmap_memory(staging_buffer_memory) };
+
+    // Create Image
+    let (texture_image, texture_image_memory) = create_image(
+        instance, 
+        device, 
+        data, 
+        width, 
+        height, 
+        data.mip_levels, 
+        vk::SampleCountFlags::TYPE_1, 
+        vk::Format::R8G8B8A8_SRGB, 
+        vk::ImageTiling::OPTIMAL, 
+        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags:: TRANSFER_SRC, 
+        vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+    data.texture_image = texture_image;
+    data.texture_image_memory = texture_image_memory;
+
+    // Transition + Copy Image
+    transition_image_layout(
+        device, 
+        data, 
+        data.texture_image, 
+        vk::Format::R8G8B8A8_SRGB, 
+        vk::ImageLayout::UNDEFINED, 
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL, 
+        data.mip_levels)?;
+    copy_buffer_to_image(device, data, staging_buffer, data.texture_image, width, height)?;
+
+    // Cleanup
+    unsafe { device.destroy_buffer(staging_buffer, None) };
+    unsafe { device.free_memory(staging_buffer_memory, None) };
+
+    // Mipmaps
+    generate_mipmaps(
+        instance, 
+        device, 
+        data, 
+        data.texture_image, 
+        vk::Format::R8G8B8A8_SRGB, 
+        width, 
+        height, 
+        data.mip_levels)?;
+    
+    Ok(())
+}
+
+pub fn generate_mipmaps(instance: &Instance, device: &Device, data: &EngineData, image: vk::Image, format: vk::Format, width: u32, height: u32, mip_levels: u32) -> Result<()> {
+    // Support
+    if unsafe { !instance
+        .get_physical_device_format_properties(data.physical_device, format)
+        .optimal_tiling_features
+        .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR)}
+        {
+            return Err(anyhow!("Texture Image format does not support linear blitting."));
+        }
+
+        // Mipmaps
+        let command_buffer = begin_single_time_commands(device, data)?;
+        let subresource = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_array_layer(0)
+            .layer_count(1)
+            .level_count(1);
+        let mut barrier = vk::ImageMemoryBarrier::default()
+            .image(image)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .subresource_range(subresource);
+        let mut mip_width = width;
+        let mut mip_height = height;
+
+        for i in 1..mip_levels {
+            barrier.subresource_range.base_mip_level = i - 1;
+            barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+            barrier.new_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            barrier.dst_access_mask = vk::AccessFlags::TRANSFER_READ;
+
+            unsafe { device.cmd_pipeline_barrier(
+                command_buffer, 
+                vk::PipelineStageFlags::TRANSFER, 
+                vk::PipelineStageFlags::TRANSFER, 
+                vk::DependencyFlags::empty(), 
+                &[] as &[vk::MemoryBarrier], 
+                &[] as &[vk::BufferMemoryBarrier], 
+                &[barrier]) };
+            
+            let src_subresource = vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(i - 1)
+                .base_array_layer(0)
+                .layer_count(1);
+            let dst_subresource = vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(i)
+                .base_array_layer(0)
+                .layer_count(1);
+            let blit =  vk::ImageBlit::default()
+                .src_offsets([
+                    vk::Offset3D {x: 0, y: 0, z: 0},
+                    vk::Offset3D {
+                        x: mip_width as i32,
+                        y: mip_height as i32,
+                        z: 1,
+                    },
+                ])
+                .src_subresource(src_subresource)
+                .dst_offsets([
+                    vk::Offset3D {x:0, y:0, z:0},
+                    vk::Offset3D {
+                        x: (if mip_width > 1 {mip_width / 2} else {1}) as i32,
+                        y: (if mip_height > 1 {mip_height / 2} else {1}) as i32,
+                        z: 1,
+                    },
+                ])
+                .dst_subresource(dst_subresource);
+            unsafe { device.cmd_blit_image(
+                command_buffer, 
+                image, 
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL, 
+                image, 
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL, 
+                &[blit], 
+                vk::Filter::LINEAR) };
+            
+            barrier.old_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            barrier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            barrier.src_access_mask = vk::AccessFlags::TRANSFER_READ;
+            barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+            unsafe { device.cmd_pipeline_barrier(
+                command_buffer, 
+                vk::PipelineStageFlags::TRANSFER, 
+                vk::PipelineStageFlags::FRAGMENT_SHADER, 
+                vk::DependencyFlags::empty(), 
+                &[] as &[vk::MemoryBarrier], 
+                &[] as &[vk::BufferMemoryBarrier], 
+                &[barrier]) };
+            
+            if mip_width > 1 {
+                mip_width /= 2;
+            } 
+            if mip_height > 1 {
+                mip_height /= 2;
+            }
+        }
+    barrier.subresource_range.base_mip_level = mip_levels - 1;
+    barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+    barrier.new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+    barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+    barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
+    unsafe { device.cmd_pipeline_barrier(
+        command_buffer, 
+        vk::PipelineStageFlags::TRANSFER, 
+        vk::PipelineStageFlags::FRAGMENT_SHADER, 
+        vk::DependencyFlags::empty(), 
+        &[] as &[vk::MemoryBarrier], 
+        &[] as &[vk::BufferMemoryBarrier], 
+        &[barrier]) };
+    
+    end_single_time_commands(device, data, command_buffer)?;
+            
+    Ok(())
+}
+
+pub fn create_texture_image_view(device: &Device, data: &mut EngineData) -> Result<()> {
+    data.texture_image_view = create_image_view  (
+        device, 
+        data.texture_image, 
+        vk::Format::R8G8B8A8_SRGB, 
+        vk::ImageAspectFlags::COLOR, 
+        data.mip_levels)?;
+
+    Ok(())
+}
+
+pub fn create_texture_sampler(device: &Device, data: &mut EngineData) -> Result<()> {
+    let info = vk::SamplerCreateInfo::default()
+        .mag_filter(vk::Filter::LINEAR)
+        .min_filter(vk::Filter::LINEAR)
+        .address_mode_u(vk::SamplerAddressMode::REPEAT)
+        .address_mode_v(vk::SamplerAddressMode::REPEAT)
+        .address_mode_w(vk::SamplerAddressMode::REPEAT)
+        .anisotropy_enable(true)
+        .max_anisotropy(16.0)
+        .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+        .unnormalized_coordinates(false)
+        .compare_enable(false)
+        .compare_op(vk::CompareOp::ALWAYS)
+        .min_lod(0.0)
+        .max_lod(data.mip_levels as f32)
+        .mip_lod_bias(0.0);
+    data.texture_sampler = unsafe { device.create_sampler(&info, None)? };
+
+    Ok(())
+
+}
 
 //====================
 // Model
 //====================
 
-pub fn load_model(data: &mut EngineData) -> Result<()> {}
+pub fn load_model(data: &mut EngineData) -> Result<()> {
+    // Model
+    let mut reader = BufReader::new(File::open("../resources/viking_room.obj")?);
+
+    let (models, _) = tobj::load_obj_buf(
+        &mut reader,
+        &tobj::LoadOptions {
+            triangulate: true,
+            ..Default::default()
+        },
+        |_| Ok(Default::default()),
+    )?;
+
+    // Vertices / Indices
+    let mut unique_vertices = HashMap::new();
+    for model in &models {
+        for index in &model.mesh.indices {
+            let pos_offset = (3 * index) as usize;
+            let tex_coord_offset = (2 * index) as usize;
+
+            let vertex = Vertex {
+                pos: vec3(
+                    model.mesh.positions[pos_offset],
+                    model.mesh.positions[pos_offset + 1] ,
+                    model.mesh.positions[pos_offset + 2],
+                    ),
+                color: vec3(1.0, 1.0, 1.0),
+                tex_coord: vec2(
+                    model.mesh.texcoords[tex_coord_offset],
+                    1.0 - model.mesh.texcoords[tex_coord_offset + 1],
+                ),
+            };
+
+            if let Some(index) = unique_vertices.get(&vertex) {
+                data.indices.push(*index as u32);
+            } else {
+                let index = data.vertices.len();
+                unique_vertices.insert(vertex, index);
+                data.vertices.push(vertex);
+                data.indices.push(index as u32);
+            }
+        }
+    }
+
+    Ok(())
+
+}
 
 //====================
 // Buffers
@@ -813,7 +1126,7 @@ pub fn create_sync_objects(device: &Device, data: &mut EngineData) -> Result<()>
 // Shared Buffers
 //====================
 
-pub fn create_buffer(instance: &Instance, device: &Device, data: &EngineData, size: vk::DeviceSize, usage: vk::BufferUsageFlags, properties: vk::MemoryPropertyFlags) -> Result<vk::Buffer, vk::DeviceMemory> {}
+pub fn create_buffer(instance: &Instance, device: &Device, data: &EngineData, size: vk::DeviceSize, usage: vk::BufferUsageFlags, properties: vk::MemoryPropertyFlags) -> Result<(vk::Buffer, vk::DeviceMemory)> {}
 
 pub fn copy_buffer(device: &Device, data: &EngineData, source: vk::Buffer, destination: vk::Buffer, size: vk::DeviceSize) -> Result<()> {}
 
