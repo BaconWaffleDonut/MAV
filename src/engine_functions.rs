@@ -1,7 +1,7 @@
-use std::{borrow::Cow, collections::HashSet, ffi::{self, CStr}, ops::Index};
-use core::{ffi::c_char};
+use std::{borrow::Cow, collections::HashSet, ffi::{self, CStr}, ops::Index, io::Cursor};
+use core::{ffi::c_char, num};
 use ash::{
-    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, vk::{self, PhysicalDevice, SurfaceKHR} 
+    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, PhysicalDevice, SurfaceKHR} 
 };
 use winit::{
     event_loop::EventLoop,
@@ -54,6 +54,51 @@ impl QueueFamilyIndices {
         } else {
             Err(anyhow!(SuitabilityError("Missing required queue families.")))
         }
+    }
+}
+
+const MAX_FRAMES_IN_FLIGHT: usize = 3;
+
+type Vec2 = cgmath::Vector2<f32>;
+type Vec3 = cgmath::Vector3<f32>;
+type Mat4 = cgmath::Matrix4<f32>;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct Vertex {
+    pos: Vec3,
+    color: Vec3,
+    tex_coord: Vec2,
+}
+
+impl Vertex {
+    fn new(pos: Vec3, color: Vec3, tex_coord: Vec2) -> Self {
+        Self { pos, color, tex_coord }
+    }
+    fn binding_descriptions() -> vk::VertexInputBindingDescription {
+        let binding_descriptions = vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX);
+        return binding_descriptions;
+    }
+    fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+        let pos = vk::VertexInputAttributeDescription::default()
+            .binding(0)
+            .location(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(0);
+        let color = vk::VertexInputAttributeDescription::default()
+            .binding(0)
+            .location(1)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(size_of::<Vec3>() as u32);
+        let tex_coord = vk::VertexInputAttributeDescription::default()
+            .binding(0)
+            .location(2)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset((size_of::<Vec3>() + size_of::<Vec3>()) as u32);
+        [pos, color, tex_coord]
     }
 }
 
@@ -436,7 +481,7 @@ pub fn create_render_pass(instance: &Instance, device: &Device, data: &mut Engin
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
     let color_attachments = &[color_attachment_ref];
-    let resolve_attachments = &[color_attachment_ref];
+    let resolve_attachments = &[color_resolve_attachment_ref];
     let subpass = vk::SubpassDescription::default()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .color_attachments(color_attachments)
@@ -467,25 +512,211 @@ pub fn create_render_pass(instance: &Instance, device: &Device, data: &mut Engin
 
 }
 
-pub fn create_descriptor_set_layout(device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_descriptor_set_layout(device: &Device, data: &mut EngineData) -> Result<()> {
+    let ubo_binding = vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::VERTEX);
+    let sampler_binding = vk::DescriptorSetLayoutBinding::default()
+        .binding(1)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+    let bindings = &[ubo_binding, sampler_binding];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
+    data.descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&info, None) }?;
 
-pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {}
+    Ok(())
+}
 
-pub fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::ShaderModule> {}
+pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {
+    // Stages
+
+    let mut vert_spv = Cursor::new(&include_bytes!("../shader/texture/vert.spv")); //need to create folders and files
+    let mut frag_spv = Cursor::new(&include_bytes!("../shader/texture/frag.spv"));
+    let vert_code = read_spv(&mut vert_spv).expect("Failed to read Vertex SPV file.");
+    let frag_code = read_spv(&mut frag_spv).expect("Failed to read Fragment SPV file.");
+    let vert_shader_info = vk::ShaderModuleCreateInfo::default().code(&vert_code);
+    let frag_shader_info = vk::ShaderModuleCreateInfo::default().code(&frag_code);
+    let vert_shader_module = unsafe { device.create_shader_module(&vert_shader_info, None).expect("Shader module error: Vertex.") };
+    let frag_shader_module = unsafe { device.create_shader_module(&frag_shader_info, None).expect("Shader module error: Fragment.") };
+    
+
+    let vert_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(vert_shader_module)
+        .name(c"main");
+    let frag_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(frag_shader_module)
+        .name(c"main");
+
+    // Vertex Input State
+    let binding_descriptions = &[Vertex::binding_descriptions()];
+    let attribute_descriptions = Vertex::attribute_descriptions();
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(binding_descriptions)
+        .vertex_attribute_descriptions(&attribute_descriptions);
+
+    // Input Assembly
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .primitive_restart_enable(false);
+
+    // Viewport State 
+    let viewport = vk::Viewport::default()
+        .x(0.0)
+        .y(0.0)
+        .width(data.swapchain_extent.width as f32)
+        .height(data.swapchain_extent.height as f32)
+        .min_depth(0.0)
+        .max_depth(1.0);
+    let scissor = vk::Rect2D::default()
+        .offset(vk::Offset2D {x: 0, y: 0} )
+        .extent(data.swapchain_extent);
+
+    let viewports = &[viewport];
+    let scissors = &[scissor];
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+        .viewports(viewports)
+        .scissors(scissors);
+
+    // Rasterization State
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
+        .depth_clamp_enable(false)
+        .rasterizer_discard_enable(false)
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0)
+        .cull_mode(vk::CullModeFlags::BACK)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        .depth_bias_enable(false);
+
+    // Multisample State
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
+        .sample_shading_enable(true)
+        .min_sample_shading(0.2)
+        .rasterization_samples(data.msaa_samples);
+    
+    // Depth Stencil State
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
+
+    // Color Blend State
+    let attachement = vk::PipelineColorBlendAttachmentState::default()
+        .color_write_mask(vk::ColorComponentFlags::RGBA)
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+        .alpha_blend_op(vk::BlendOp::ADD);
+    let attachments = &[attachement];
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
+        .logic_op_enable(false)
+        .logic_op(vk::LogicOp::COPY)
+        .attachments(attachments)
+        .blend_constants([0.0, 0.0, 0.0, 0.0]);
+
+    // Push Constant Ranges
+    let vert_push_constant_range = vk::PushConstantRange::default()
+        .stage_flags(vk::ShaderStageFlags::VERTEX)
+        .offset(0)
+        .size(64);
+    let frag_push_constant_range = vk::PushConstantRange::default()
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+        .offset(64)
+        .size(4);
+
+    // Layout
+    let set_layouts = &[data.descriptor_set_layout];
+    let push_constant_ranges = &[vert_push_constant_range, frag_push_constant_range];
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(set_layouts)
+        .push_constant_ranges(push_constant_ranges);
+
+    data.pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+
+    // Dynamic State 
+    let dynamic_state = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_state);
+
+    // Create
+
+    let stages = &[vert_stage, frag_stage];
+    let info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(stages)
+        .vertex_input_state(&vertex_input_state)
+        .input_assembly_state(&input_assembly_state)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rasterization_state)
+        .multisample_state(&multisample_state)
+        .depth_stencil_state(&depth_stencil_state)
+        .color_blend_state(&color_blend_state)
+        .dynamic_state(&dynamic_state_info)
+        .layout(data.pipeline_layout)
+        .render_pass(data.render_pass)
+        .subpass(0);
+
+    let graphics_pipelines = unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None).unwrap() };
+    data.pipeline = graphics_pipelines[0];
+
+    // Cleanup
+    unsafe { device.destroy_shader_module(vert_shader_module, None) };
+    unsafe { device.destroy_shader_module(frag_shader_module, None) };
+
+    Ok(())
+}
 
 //====================
 // Framebuffers
 //====================
 
-pub fn create_framebuffers(device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_framebuffers(device: &Device, data: &mut EngineData) -> Result<()> {
+    data.framebuffers = data.swapchain_image_views
+        .iter()
+        .map(|i| {
+            let attachments = &[data.color_image_view, data.depth_image_view, *i];
+            let info = vk::FramebufferCreateInfo::default()
+                .render_pass(data.render_pass)
+                .attachments(attachments)
+                .width(data.swapchain_extent.width)
+                .height(data.swapchain_extent.height)
+                .layers(1);
+            unsafe { device.create_framebuffer(&info, None) }
+        }).collect::<Result<Vec<_>, _>>()?;
+    Ok(())
+}
 
 //====================
 // Command Pool
 //====================
 
-pub fn create_command_pools(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {}
+pub fn create_command_pools(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
+    // Global 
+    data.command_pool = create_command_pool(instance, device, data)?;
 
-pub fn create_command_pool(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<vk::CommandPool> {}
+    // Per-Framebuffer
+    let num_images = data.swapchain_images.len();
+    for _ in 0..num_images {
+        let command_pool = create_command_pool(instance, device, data)?;
+        data.command_pools.push(command_pool);
+    }
+    Ok(())
+}
+
+pub fn create_command_pool(instance: &Instance, device: &Device, data: &mut EngineData, entry: &Entry, window: &dyn Window) -> Result<vk::CommandPool> {
+    let indices = unsafe { QueueFamilyIndices::get(entry, instance, data.physical_device, window)? };
+    let info = vk::CommandPoolCreateInfo::default()
+        .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+        .queue_family_index(indices.graphics);
+    Ok(unsafe { device.create_command_pool(&info, None)? })
+}
 
 //====================
 // Color Objects

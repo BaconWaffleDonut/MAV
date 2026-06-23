@@ -85,20 +85,6 @@ impl ApplicationHandler for App {
 // Video Engine
 //====================
 
-// Constants and structures
-const MAX_FRAMES_IN_FLIGHT: usize = 3;
-
-type Vec2 = cgmath::Vector2<f32>;
-type Vec3 = cgmath::Vector3<f32>;
-type Mat4 = cgmath::Matrix4<f32>;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-struct Vertex {
-    pos: Vec3,
-    color: Vec3,
-    tex_coord: Vec2,
-}
 
 struct Engine {
     // Vulkan Stuff
@@ -189,7 +175,7 @@ struct EngineData {
     texture_sampler: vk::Sampler,
 
     // Model
-    vertices: Vec<Vertex>,
+    vertices: Vec<engine_functions::Vertex>,
     indices: Vec<u32>,
 
     // Buffers
