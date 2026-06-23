@@ -1,5 +1,4 @@
-use std::{
-    cell::RefCell, 
+use std::{ 
     error::Error, time::Instant};
 use winit::{
     application::ApplicationHandler,
@@ -16,7 +15,7 @@ use winit::{
 };
 use log::*;
 use ash::{
-    Device, Entry, Instance, khr::surface, vk
+    Device, Entry, Instance, vk
 };
 
 #[path = "util/file.rs"]
