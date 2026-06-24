@@ -1,6 +1,8 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}, ffi::{self, CStr}, fs::File, io::{BufReader, Cursor}, ops::Index};
+#![allow(dead_code)]
+use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor}, ops::Index};
 use std::ptr::copy_nonoverlapping as memcpy;
 use core::ffi::c_char;
+use ahash::{AHashMap, AHashSet};
 use ash::{
     Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, PhysicalDevice, SurfaceKHR} };
 use cgmath::{vec2, vec3};
@@ -14,7 +16,7 @@ use crate::EngineData;
 
 const APP_NAME: &CStr = c"Testing";
 const ENGINE_NAME: &CStr = c"M.A.V.";
-const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
+pub const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 const VALIDATION_LAYERS: [&CStr; 1] = [c"VK_LAYER_KHRONOS_validation"];
 
 pub fn test() -> Result<()> {
@@ -100,15 +102,35 @@ impl Vertex {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-struct UniformBufferObject {
-    view: Mat4,
-    proj: Mat4,
+impl PartialEq for Vertex {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos && self.color == other.color && self.tex_coord == other.tex_coord
+    }
 }
 
-struct Utils {
+impl Eq for Vertex {}
+
+impl Hash for Vertex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.pos[0].to_bits().hash(state);
+        self.pos[1].to_bits().hash(state);
+        self.pos[2].to_bits().hash(state);
+        self.color[0].to_bits().hash(state);
+        self.color[1].to_bits().hash(state);
+        self.color[2].to_bits().hash(state);
+        self.tex_coord[0].to_bits().hash(state);
+        self.tex_coord[1].to_bits().hash(state);
+    }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UniformBufferObject {
+    pub view: Mat4,
+    pub proj: Mat4,
+}
+
+pub struct Utils {}
 
 impl Utils {
     pub fn event_loop() -> Result<EventLoop> {
@@ -134,7 +156,7 @@ pub struct SuitabilityError(pub &'static str);
 // Instance
 //====================
 
-pub unsafe fn create_instance() -> Result<Instance> {
+pub unsafe fn create_instance(data: &mut EngineData, window: &dyn Window, entry: &Entry) -> Result<Instance> {
     let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
     let event_loop = Utils::event_loop().expect("Failed to fetch event loop.");
     // Application Info
@@ -187,8 +209,8 @@ pub unsafe fn create_instance() -> Result<Instance> {
         .create_instance(&create_info, None)
         .expect("Failed to create Instace.")};
     
-    let debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
-    let debug_call_back = unsafe{debug_utils_loader
+    data.debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
+    data.debug_call_back = unsafe{data.debug_utils_loader
         .create_debug_utils_messenger(&debug_info, None)
         .unwrap()};
 
@@ -272,6 +294,7 @@ pub unsafe fn pick_physical_device(instance: &Instance, entry: &Entry, window: &
     Ok((device_extension_names_raw, features))
 } */
 // Rebuild this section now that I managed to implement QueueFamilyIndices
+// Eventually refactor
 
 pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCountFlags {
     let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
@@ -298,7 +321,7 @@ pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCou
 pub fn create_logical_device(entry: &Entry, instance: &Instance, window: &dyn Window, data: &EngineData) -> Result<Device> {
     // Queue Create Info
     let indices = unsafe { QueueFamilyIndices::get(&entry, &instance, data.physical_device, data)? };
-    let mut unique_indices = HashSet::new();
+    let mut unique_indices = AHashSet::new();
     unique_indices.insert(indices.graphics);
     unique_indices.insert(indices.present);
 
@@ -405,12 +428,13 @@ pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Devic
 
     data.swapchain = unsafe { swapchain_loader.create_swapchain(&info, None).unwrap() };
     data.swapchain_images = unsafe {swapchain_loader.get_swapchain_images(data.swapchain)?};
+    data.swapchain_loader = swapchain_loader;
 
     Ok(()) 
 
 }
 
-unsafe fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> Result<()> {
+pub fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> Result<()> {
     let present_image_views: Vec<vk::ImageView> = data.swapchain_images
         .iter()
         .map(|&image| {
@@ -818,7 +842,7 @@ pub fn get_supported_format(instance: &Instance, data: &EngineData, candidates: 
 // Texture
 //====================
 
-pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut EngineData, format: vk::Format) -> Result<()> {
+pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
     // Load 
     let image = File::open("./resources/viking_room.png")?;
     
@@ -1053,19 +1077,41 @@ pub fn create_texture_sampler(device: &Device, data: &mut EngineData) -> Result<
 
 pub fn load_model(data: &mut EngineData) -> Result<()> {
     // Model
-    let mut reader = BufReader::new(File::open("../resources/viking_room.obj")?);
-
-    let (models, _) = tobj::load_obj_buf(
-        &mut reader,
-        &tobj::LoadOptions {
-            triangulate: true,
-            ..Default::default()
-        },
-        |_| Ok(Default::default()),
-    )?;
+    let viking_room = tobj::load_obj("./resources/viking_room.obj", &tobj::LoadOptions{triangulate: true, ..Default::default()});
+    assert!(viking_room.is_ok());
+    let (models, materials) = viking_room.expect("Failed to load OBJ file.");
+    let materials = materials.expect("Failed to load MTL file.");
+    
+    // INFO
+    println!("Number of models: {}", models.len());
+    println!("Number of materials: {}", materials.len());
+    for (i, m) in models.iter().enumerate() {
+        let mesh = &m.mesh;
+        println!("model[{}].name = \'{}\'", i, m.name);
+        println!("model[{}].mesh.material_id = {:?}", i, mesh.material_id);
+        println!("Size of model[{}].face_arities: {}", i, mesh.face_arities.len());
+        let mut next_face = 0;
+        for f in 0..mesh.face_arities.len() {
+            let end = next_face + mesh.face_arities[f] as usize;
+            let face_indices: Vec<_> = mesh.indices[next_face..end].iter().collect();
+            println!("    face[{}] = {:?}", f, face_indices);
+            next_face = end;
+        }
+        println!("model[{}].vertices: {}", i, mesh.positions.len() / 3);
+        assert!(mesh.positions.len() % 3 == 0);
+        for v in 0..mesh.positions.len() / 3 {
+            println!(
+                "   v[{}] = ({}, {}, {})",
+                v,
+                mesh.positions[3 * v],
+                mesh.positions[3 * v + 1],
+                mesh.positions[3 * v + 2],
+            );
+        }
+    }
 
     // Vertices / Indices
-    let mut unique_vertices = HashMap::new();
+    let mut unique_vertices = AHashMap::new();
     for model in &models {
         for index in &model.mesh.indices {
             let pos_offset = (3 * index) as usize;
