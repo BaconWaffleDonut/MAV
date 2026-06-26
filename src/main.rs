@@ -4,7 +4,7 @@ use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use cgmath::{Deg, point3, vec3};
-use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, window::{Window, WindowAttributes, WindowId}};
+use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{self, ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
 use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk::Handle, vk};
 use crate::engine_functions::*;
@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     pretty_env_logger::init();
     println!("Starting main function");
 
-    let event_loop = engine_functions::Utils::event_loop().expect("MAIN: Failed to import event loop.");
+    let event_loop = EventLoop::new()?;
     println!("Running event loop.");
 
     engine_functions::test().expect("Failed to load engine test function.");
@@ -67,9 +67,8 @@ impl ApplicationHandler for App {
                 window.pre_present_notify();
 
                 //Draw, using temporary full color window for testing
-                /* fill::fill_window(window.as_ref()); */
-                let mut app = unsafe { Engine::create(window.as_ref()).expect("Failed to create application.") };
-                unsafe{app.render(window.as_ref()).unwrap()};
+                let mut app = unsafe { Engine::create(window.as_ref(), event_loop).expect("Failed to create application.") };
+                unsafe{app.render(window.as_ref(), event_loop).expect("Failed to render...")};
                 //Can use window.request_redraw(); for continous loop
             },
             _ => (),
@@ -99,33 +98,58 @@ impl Engine {
         println!("Starting Engine.")
     }
     // Create the Vulkan App
-    unsafe fn create(window: &dyn Window) -> Result<Self> {
+    unsafe fn create(window: &dyn Window, event_loop: &dyn ActiveEventLoop) -> Result<Self> {
         let mut data = EngineData::default() ;
+        println!("Create mut Data");
         let entry = unsafe { Entry::load().map_err(|b| anyhow!("{}", b))? };
-        let instance = unsafe { create_instance(&mut data, window, &entry) }?;
-        data.surface = engine_functions::Utils::surface(&entry, window, &instance)?;
-        unsafe { pick_physical_device(&instance, &entry, window)? };
-        let device = create_logical_device(&entry, &instance, window, &data)?;
-        create_swapchain(window, &instance, &device, &mut data, &entry)?;
-        create_swapchain_image_views(&device, &mut data)?;
-        create_render_pass(&instance, &device, &mut data)?;
-        create_descriptor_set_layout(&device, &mut data)?;
-        create_pipeline(&device, &mut data)?;
-        create_command_pools(&instance, &device, &mut data, &entry, window)?;
-        create_color_objects(&instance, &device, &mut data)?;
-        create_depth_objects(&instance, &device, &mut data)?;
-        create_framebuffers(&device, &mut data)?;
-        create_texture_image(&instance, &device, &mut data)?;
-        create_texture_image_view(&device, &mut data)?;
-        create_texture_sampler(&device, &mut data)?;
-        load_model(&mut data)?;
-        create_vertex_buffer(&instance, &device, &mut data)?;
-        create_index_buffer(&instance, &device, &mut data)?;
-        create_uniform_buffers(&instance, &device, &mut data)?;
-        create_descriptor_pool(&device, &mut data)?;
-        create_descriptor_sets(&device, &mut data)?;
-        create_command_buffers(&device, &mut data)?;
-        create_sync_objects(&device, &mut data)?;
+        println!("Created Entry");
+        let instance = create_instance(&mut data, window, &entry, event_loop).expect("MAIN: Failed to create Instace.");
+        println!("Created Instace");
+        pick_physical_device(&instance, &entry, &mut data, event_loop, window).expect("MAIN: Failed to pick Physical Device");
+        println!("Picked phyiscal device");
+        println!("Created Surface");
+        let device = create_logical_device(&instance, &mut data).expect("MAIN: Failed to create Logical Device");
+        println!("Created Device");
+        create_swapchain(&instance, &device, &mut data, 800, 800, window, &entry, event_loop).expect("MAIN: Failed to create Swapchain");
+        println!("Created Swapchain");
+        create_swapchain_image_views(&device, &mut data).expect("MAIN: Failed to create Swapchain Image Views.");
+        println!("Created Swapchain Image Views");
+        create_render_pass(&instance, &device, &mut data).expect("MAIN: Failed to create Render Pass");
+        println!("Created Render Pass");
+        create_descriptor_set_layout(&device, &mut data).expect("MAIN: Failed to create Descriptor Set Layout.");
+        println!("Created Descriptor Set Layout");
+        create_pipeline(&device, &mut data).expect("MAIN: Failed to create Graphics Pipeline.");
+        println!("Created Pipeline");
+        create_command_pools(&instance, &device, &mut data, &entry, window).expect("MAIN: Failed to create Command Pools.");
+        println!("Created Command Pools");
+        create_color_objects(&instance, &device, &mut data).expect("MAIN: Failed to create Color Objects.");
+        println!("Created Color Objects");
+        create_depth_objects(&instance, &device, &mut data).expect("MAIN: Failed to create Depth Objects.");
+        println!("Created Depth Objects");
+        create_framebuffers(&device, &mut data).expect("MAIN: Failed to create Framebuffers.");
+        println!("Created Framebuffers");
+        create_texture_image(&instance, &device, &mut data).expect("MAIN: Failed to create Texture Image.");
+        println!("Created Texture Image");
+        create_texture_image_view(&device, &mut data).expect("MAIN: Failed to create Texture Image View.");
+        println!("Created Texture Image View");
+        create_texture_sampler(&device, &mut data).expect("MAIN: Failed to create Texture Sampler.");
+        println!("Created Texture Sampler");
+        load_model(&mut data).expect("MAIN: Failed to load Model.");
+        println!("Loaded Model");
+        create_vertex_buffer(&instance, &device, &mut data).expect("MAIN: Failed to create Vertex Buffer.");
+        println!("Created Vertex Buffer");
+        create_index_buffer(&instance, &device, &mut data).expect("MAIN: Failed to create Index Buffer.");
+        println!("Created Index Buffer");
+        create_uniform_buffers(&instance, &device, &mut data).expect("MAIN: Failed to create Uniform Buffers.");
+        println!("Created Uniform Buffers");
+        create_descriptor_pool(&device, &mut data).expect("MAIN: Failed to create Descriptor Pool.");
+        println!("Created Descriptor Pool");
+        create_descriptor_sets(&device, &mut data).expect("MAIN: Failed to create Descriptor Sets.");
+        println!("Created Descriptor Sets");
+        create_command_buffers(&device, &mut data).expect("MAIN: Failed to create Command Buffers.");
+        println!("Created Command Buffers");
+        create_sync_objects(&device, &mut data);
+        println!("Created Sync Objects");
         Ok(Self {
             entry,
             instance,
@@ -139,25 +163,25 @@ impl Engine {
     }
     
     // Render a frame
-    unsafe fn render(&mut self, window: &dyn Window) -> Result<()> {
+    unsafe fn render(&mut self, window: &dyn Window, event_loop: &dyn ActiveEventLoop) -> Result<()> {
         let in_flight_fence = self.data.in_flight_fences[self.frame];
         (unsafe { self.device.wait_for_fences(&[in_flight_fence], true, u64::MAX) })?;
-        let result = unsafe { self.data.swapchain_loader.acquire_next_image(self.data.swapchain, u64::MAX, self.data.image_available_semaphores[self.frame], vk::Fence::null()) };
+        let result = unsafe { self.data.swapchain_loader.as_ref().unwrap().acquire_next_image(self.data.swapchain, u64::MAX, self.data.image_available_semaphores[self.frame], vk::Fence::null()) };
         
         let image_index = match result {
             Ok((image_index, _)) => image_index as usize,
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return unsafe { self.recreate_swapchain(window) },
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return unsafe { self.recreate_swapchain(window, event_loop) },
             Err(e) => return Err(anyhow!("MAIN: {}", e)),
         };
+        
+        // let image_in_flight = self.data.images_in_flight[image_index];
+        // if !image_in_flight.is_null() {
+        //     (unsafe { self.device.wait_for_fences(&[image_in_flight], true, u64::MAX) })?;
+        // }
 
-        let image_in_flight = self.data.images_in_flight[image_index];
-        if !image_in_flight.is_null() {
-            (unsafe { self.device.wait_for_fences(&[image_in_flight], true, u64::MAX) })?;
-        }
-
-        self.data.images_in_flight[image_index] = in_flight_fence;
-        (unsafe { self.update_command_buffer(image_index) })?;
-        (unsafe { self.update_uniform_buffer(image_index) })?;
+        // self.data.images_in_flight[image_index] = in_flight_fence;
+        // (unsafe { self.update_command_buffer(image_index) })?;
+        // (unsafe { self.update_uniform_buffer(image_index) })?;
 
         let wait_semaphores = &[self.data.image_available_semaphores[self.frame]];
         let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
@@ -179,11 +203,11 @@ impl Engine {
             .swapchains(swapchains)
             .image_indices(image_indices);
 
-        let result = unsafe { self.data.swapchain_loader.queue_present(self.data.present_queue, &present_info) };
+        let result = unsafe { self.data.swapchain_loader.as_ref().unwrap().queue_present(self.data.present_queue, &present_info) };
         let changed = result == Err(vk::Result::SUBOPTIMAL_KHR) || result == Err(vk::Result::ERROR_OUT_OF_DATE_KHR);
         if self.resized || changed {
             self.resized = false;
-            (unsafe { self.recreate_swapchain(window)})?;
+            (unsafe { self.recreate_swapchain(window, event_loop)})?;
         } else if let Err(e) = result {
             return Err(anyhow!("MAIN: {}", e));
         }
@@ -304,10 +328,10 @@ impl Engine {
     }
 
     // Recreate the Swapchain
-    unsafe fn recreate_swapchain(&mut self, window: &dyn Window) -> Result<()> {
-        (unsafe { self.device.device_wait_idle() })?;
-        self.destroy_swapchain();
-        create_swapchain(window, &self.instance, &self.device, &mut self.data, &self.entry)?;
+    unsafe fn recreate_swapchain(&mut self, window: &dyn Window, event_loop: &dyn ActiveEventLoop) -> Result<()> {
+        unsafe { self.device.device_wait_idle() }?;
+        unsafe { self.destroy_swapchain() };    
+        create_swapchain(&self.instance, &self.device, &mut self.data, 800, 800, window, &self.entry, event_loop)?;
         create_swapchain_image_views(&self.device, &mut self.data)?;
         create_render_pass(&self.instance, &self.device, &mut self.data)?;
         create_pipeline(&self.device, &mut self.data)?;
@@ -343,10 +367,10 @@ impl Engine {
         unsafe { self.device.destroy_command_pool(self.data.command_pool, None) };
         unsafe { self.device.destroy_descriptor_set_layout(self.data.descriptor_set_layout, None) };
         unsafe { self.device.destroy_device(None) };
-        unsafe { self.data.surface_loader.destroy_surface(self.data.surface, None) };
+        unsafe { self.data.surface_loader.as_ref().unwrap().destroy_surface(self.data.surface, None) };
 
         if VALIDATION_ENABLED {
-            unsafe { self.data.debug_utils_loader.destroy_debug_utils_messenger(self.data.debug_call_back, None) };
+            // unsafe { self.destroy_debug_utils_messenger(self.data.debug_call_back, None) };
         }
         
         unsafe { self.instance.destroy_instance(None) };
@@ -369,30 +393,29 @@ impl Engine {
         unsafe { self.device.destroy_pipeline_layout(self.data.pipeline_layout, None) };
         unsafe { self.device.destroy_render_pass(self.data.render_pass, None) };
         self.data.swapchain_image_views.iter().for_each(|v| unsafe { self.device.destroy_image_view(*v, None) });
-        unsafe { self.data.swapchain_loader.destroy_swapchain(self.data.swapchain, None) };
+        // unsafe { self.data.swapchain_loader.destroy_swapchain(self.data.swapchain, None) };
     }
 
     //
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 struct EngineData {
     // Debug
-    messenger: vk::DebugUtilsMessengerEXT,
     debug_call_back: vk::DebugUtilsMessengerEXT,
-    debug_utils_loader: ash::ext::debug_utils::Instance,
+    // debug_utils_loader: ash::ext::debug_utils::Instance,
 
     // Surface
     surface: vk::SurfaceKHR,
     surface_format: vk::SurfaceFormatKHR,
-    surface_loader: surface::Instance,
+    surface_loader: Option<surface::Instance>,
 
     // Physical & Logical Device
     physical_device: vk::PhysicalDevice,
     msaa_samples: vk::SampleCountFlags,
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
-    device_extension_names_raw: vk::PhysicalDeviceFeatures,
+    // device_extension_names_raw: vk::PhysicalDeviceFeatures,
 
     // Swapchain
     swapchain_format: vk::Format,
@@ -400,7 +423,7 @@ struct EngineData {
     swapchain: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
-    swapchain_loader: swapchain::Device,
+    swapchain_loader: Option<swapchain::Device>,
 
     // Pipeline
     render_pass: vk::RenderPass,

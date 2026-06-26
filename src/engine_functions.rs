@@ -1,22 +1,20 @@
-#![allow(dead_code)]
-use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor}, ops::Index};
+#![allow(dead_code, unsafe_op_in_unsafe_fn)]
+use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor}};
 use std::ptr::copy_nonoverlapping as memcpy;
 use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
 use ash::{
-    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, PhysicalDevice, SurfaceKHR} };
+    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::PhysicalDevice, vk};
 use cgmath::{vec2, vec3};
 use winit::{
-    event_loop::EventLoop,
-    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
-    window::Window,};
+    event_loop::ActiveEventLoop, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::Window};
 use anyhow::{Ok, Result, anyhow};
 use thiserror::Error;
 use crate::EngineData;
 
 const APP_NAME: &CStr = c"Testing";
 const ENGINE_NAME: &CStr = c"M.A.V.";
-pub const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
+pub const VALIDATION_ENABLED: bool = true;
 const VALIDATION_LAYERS: [&CStr; 1] = [c"VK_LAYER_KHRONOS_validation"];
 
 pub fn test() -> Result<()> {
@@ -35,8 +33,7 @@ struct QueueFamilyIndices {
 }
 
 impl QueueFamilyIndices {
-    unsafe fn get(entry: &Entry, instance: &Instance, physical_device: vk::PhysicalDevice, data: &EngineData) -> Result<Self> {
-        let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed to fetch surface loader. QueueFamilyIndices");
+    unsafe fn get(instance: &Instance, physical_device: vk::PhysicalDevice, data: &EngineData) -> Result<Self> {
         let properties = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
         let graphics = properties
             .iter()
@@ -44,7 +41,7 @@ impl QueueFamilyIndices {
             .map(|i| i as u32);
         let mut present = None;
         for (index, properties) in properties.iter().enumerate() {
-            if unsafe { surface_loader.get_physical_device_surface_support(physical_device, index as u32, data.surface)? } {
+            if unsafe { data.surface_loader.as_ref().unwrap().get_physical_device_surface_support(physical_device, index as u32, data.surface)? } {
                 present = Some(index as u32);
                 break;
             }
@@ -130,35 +127,19 @@ pub struct UniformBufferObject {
     pub proj: Mat4,
 }
 
-pub struct Utils {}
-
-impl Utils {
-    pub fn event_loop() -> Result<EventLoop> {
-        let event_loop = EventLoop::new()?;
-        Ok(event_loop)
-    }
-    pub fn surface(entry: &Entry, window: &dyn Window, instance: &Instance,) -> Result<SurfaceKHR> {
-        let event_loop = Utils::event_loop().expect("Failed to call event loop");
-        let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
-        Ok(surface)
-    }
-    pub fn surface_loader(entry: &Entry, instance: &Instance) -> Result<surface::Instance> {
-        let surface_loader = surface::Instance::new(&entry, &instance);
-        Ok(surface_loader)
-    }
-}
-
 #[derive(Debug, Error)]
 #[error("{0}")]
 pub struct SuitabilityError(pub &'static str);
+
+
 
 //====================
 // Instance
 //====================
 
-pub unsafe fn create_instance(data: &mut EngineData, window: &dyn Window, entry: &Entry) -> Result<Instance> {
+pub fn create_instance(data: &mut EngineData, window: &dyn Window, entry: &Entry, event_loop: &dyn ActiveEventLoop) -> Result<Instance> {
     let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
-    let event_loop = Utils::event_loop().expect("Failed to fetch event loop.");
+    // let event_loop = Utils::event_loop().expect("Failed to fetch event loop.");
     // Application Info
     let application_info = vk::ApplicationInfo::default()
         .application_name(APP_NAME)
@@ -209,19 +190,17 @@ pub unsafe fn create_instance(data: &mut EngineData, window: &dyn Window, entry:
         .create_instance(&create_info, None)
         .expect("Failed to create Instace.")};
     
-    data.debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
-    data.debug_call_back = unsafe{data.debug_utils_loader
+    let debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
+    data.debug_call_back = unsafe{debug_utils_loader
         .create_debug_utils_messenger(&debug_info, None)
         .unwrap()};
-
-
 
     Ok(instance)
 }
 
 // Debug Callback
 
-unsafe extern "system" fn vulkan_debug_callback(
+extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk::DebugUtilsMessageTypeFlagsEXT,
     p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
@@ -253,13 +232,13 @@ unsafe extern "system" fn vulkan_debug_callback(
 // Physical Device
 //====================
 
-pub unsafe fn pick_physical_device(instance: &Instance, entry: &Entry, window: &dyn Window) -> Result<(u32, PhysicalDevice)> {
+pub fn pick_physical_device(instance: &Instance, entry: &Entry, data: &mut EngineData, event_loop: &dyn ActiveEventLoop, window: &dyn Window) -> Result<(u32, PhysicalDevice)> {
     // Import surface and surface loader to get requirements. 
-    let surface = Utils::surface(&entry, window, &instance).expect("Failed fetching surface.");
-    let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed fetching surface loader.");
+    let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
+    let surface_loader = surface::Instance::new(&entry, &instance);
 
     // Select and check physical device.
-    let physical_devices = unsafe{instance.enumerate_physical_devices().expect("Physical Device Error")};
+    let physical_devices = unsafe { instance.enumerate_physical_devices().expect("Physical Device Error") };
     let (physical_device, queue_family_index) = physical_devices
         .iter()
         .find_map(|physical_device| {
@@ -277,8 +256,17 @@ pub unsafe fn pick_physical_device(instance: &Instance, entry: &Entry, window: &
                     }
                 }) }
         }).expect("Failed to find suitable phyiscal device.");
+        let features = unsafe { instance.get_physical_device_features(physical_device) };
+        if features.sampler_anisotropy != vk::TRUE {
+            return Err(anyhow!(SuitabilityError("No Sampler Anisotropy.")));
+        }
 
         let queue_family_index = queue_family_index as u32;
+        data.physical_device = physical_device;
+        data.msaa_samples = get_msaa_samples(instance, data);
+        data.surface = surface;
+        data.surface_loader = Some(surface_loader);
+        
 
         Ok((queue_family_index, physical_device))
  }
@@ -318,9 +306,9 @@ pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCou
 // Logical Device
 //====================
 
-pub fn create_logical_device(entry: &Entry, instance: &Instance, window: &dyn Window, data: &EngineData) -> Result<Device> {
+pub fn create_logical_device(instance: &Instance, data: &mut EngineData) -> Result<Device> {
     // Queue Create Info
-    let indices = unsafe { QueueFamilyIndices::get(&entry, &instance, data.physical_device, data)? };
+    let indices = unsafe { QueueFamilyIndices::get(&instance, data.physical_device, data)? };
     let mut unique_indices = AHashSet::new();
     unique_indices.insert(indices.graphics);
     unique_indices.insert(indices.present);
@@ -346,13 +334,17 @@ pub fn create_logical_device(entry: &Entry, instance: &Instance, window: &dyn Wi
     // Create
 
     let create_info = vk::DeviceCreateInfo::default()
-        .queue_create_infos(std::slice::from_ref(&queue_infos.index(1)))
+        .queue_create_infos(&queue_infos)
         .enabled_extension_names(&extensions)
         .enabled_features(&features);
     
     let device = unsafe { instance
         .create_device(data.physical_device, &create_info, None)
         .unwrap() };
+
+    // Queues
+    data.graphics_queue = unsafe { device.get_device_queue(indices.graphics, 0) };
+    data.present_queue = unsafe { device.get_device_queue(indices.present, 0) };
 
     Ok(device)
 }
@@ -361,28 +353,23 @@ pub fn create_logical_device(entry: &Entry, instance: &Instance, window: &dyn Wi
 // Swapchain
 //====================
 
-pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Device, data: &mut EngineData, entry: &Entry) -> Result<()> {
+pub fn create_swapchain(instance: &Instance, device: &Device, data: &mut EngineData, width: u32, height: u32, window: &dyn Window, entry: &Entry, event_loop: &dyn ActiveEventLoop) -> Result<()> {
     // Setup
-    let surface_loader = Utils::surface_loader(&entry, &instance).expect("Failed fetching surface loader.");
-    let indices = unsafe { QueueFamilyIndices::get(entry, instance, data.physical_device, data) }?;
-    let surface_capabilites = unsafe { surface_loader 
-        .get_physical_device_surface_capabilities(data.physical_device, data.surface).unwrap() };
-    data.surface_format = unsafe {
-        surface_loader.get_physical_device_surface_formats(data.physical_device, data.surface).unwrap()[0]
-    };
+    let indices = unsafe { QueueFamilyIndices::get(instance, data.physical_device, data) }?;
+    let surface_capabilites = unsafe { data.surface_loader.as_ref().unwrap().get_physical_device_surface_capabilities(data.physical_device, data.surface).unwrap() };
+    let surface_format_capabilites = unsafe { data.surface_loader.as_ref().unwrap().get_physical_device_surface_formats(data.physical_device, data.surface).unwrap() };
+
+    let surface_format = get_swapchain_surface_format(&surface_format_capabilites);
+    let extent = get_swapchain_extent(surface_capabilites, window);
+    data.swapchain_format = surface_format.format;
+    data.swapchain_extent = extent;
+
     let mut image_count = surface_capabilites.min_image_count + 1;
     if surface_capabilites.max_image_count != 0 && image_count > surface_capabilites.max_image_count {
         image_count = surface_capabilites.max_image_count;
     } else {
         vk::SharingMode::EXCLUSIVE;
-    };
-    let surface_resolution = match surface_capabilites.current_extent.width {
-        u32::MAX => vk::Extent2D {
-            width: data.window_width,
-            height: data.window_height,
-        },
-        _ => surface_capabilites.current_extent,
-    };
+    }; 
     let pre_transform = if surface_capabilites
         .supported_transforms
         .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
@@ -391,7 +378,7 @@ pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Devic
         } else {
             surface_capabilites.current_transform
         };
-    let present_modes = unsafe { surface_loader
+    let present_modes = unsafe { data.surface_loader.as_ref().unwrap()
         .get_physical_device_surface_present_modes(data.physical_device, data.surface)
         .unwrap() };
     let present_mode = present_modes
@@ -407,15 +394,20 @@ pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Devic
     } else {
         vk::SharingMode::EXCLUSIVE
     };
+
     let swapchain_loader = swapchain::Device::new(&instance, &device);
+    // println!("{:?}", data.surface);
+    // unsafe { data.surface_loader.as_ref().unwrap().destroy_surface(data.surface, None) };
+    // data.surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
+    // println!("{:?}", data.surface);
 
     // Create
     let info =  vk::SwapchainCreateInfoKHR::default()
         .surface(data.surface)
         .min_image_count(image_count)
-        .image_format(data.surface_format.format)
-        .image_color_space(data.surface_format.color_space)
-        .image_extent(surface_resolution)
+        .image_format(surface_format.format)
+        .image_color_space(surface_format.color_space)
+        .image_extent(extent)
         .image_array_layers(1)
         .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         .image_sharing_mode(image_sharing_mode)
@@ -426,12 +418,36 @@ pub fn create_swapchain(window: &dyn Window, instance: &Instance, device: &Devic
         .clipped(true)
         .old_swapchain(vk::SwapchainKHR::null());
 
-    data.swapchain = unsafe { swapchain_loader.create_swapchain(&info, None).unwrap() };
+    data.swapchain = unsafe { swapchain_loader.create_swapchain(&info, None)? };
     data.swapchain_images = unsafe {swapchain_loader.get_swapchain_images(data.swapchain)?};
-    data.swapchain_loader = swapchain_loader;
+    data.swapchain_loader = Some(swapchain_loader);
 
     Ok(()) 
 
+}
+
+pub fn get_swapchain_extent(capabilities: vk::SurfaceCapabilitiesKHR, window: &dyn Window) -> vk::Extent2D {
+    if capabilities.current_extent.width != u32::MAX {
+        capabilities.current_extent
+    } else {
+        vk::Extent2D::default()
+            .width(window.outer_size().width.clamp(
+                capabilities.min_image_extent.width,
+                capabilities.max_image_extent.width,
+            ))
+            .height(window.outer_size().width.clamp(
+                capabilities.min_image_extent.height,
+                capabilities.max_image_extent.height,
+            ))
+    }
+}
+
+pub fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {
+    formats
+        .iter()
+        .cloned()
+        .find(|f| f .format == vk::Format::B8G8R8A8_SRGB && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
+        .unwrap_or_else(|| formats[0])
 }
 
 pub fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> Result<()> {
@@ -440,7 +456,7 @@ pub fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> R
         .map(|&image| {
             let info = vk::ImageViewCreateInfo::default()
                 .view_type(vk::ImageViewType::TYPE_2D)
-                .format(data.surface_format.format)
+                .format(data.swapchain_format)
                 .components(vk::ComponentMapping {
                     r: vk::ComponentSwizzle::R,
                     g: vk::ComponentSwizzle::G,
@@ -478,7 +494,7 @@ pub fn create_render_pass(instance: &Instance, device: &Device, data: &mut Engin
         .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
     let depth_stencil_attachement = vk::AttachmentDescription::default()
         .format(get_depth_format(instance, data)?)
         .samples(data.msaa_samples)
@@ -562,8 +578,8 @@ pub fn create_descriptor_set_layout(device: &Device, data: &mut EngineData) -> R
 pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {
     // Stages
 
-    let mut vert_spv = Cursor::new(&include_bytes!("./shader/texture/vert.spv")); //need to create folders and files
-    let mut frag_spv = Cursor::new(&include_bytes!("./shader/texture/frag.spv"));
+    let mut vert_spv = Cursor::new(&include_bytes!("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/shader/texture/vert.spv")); //need to create folders and files
+    let mut frag_spv = Cursor::new(&include_bytes!("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/shader/texture/frag.spv"));
     let vert_code = read_spv(&mut vert_spv).expect("Failed to read Vertex SPV file.");
     let frag_code = read_spv(&mut frag_spv).expect("Failed to read Fragment SPV file.");
     let vert_shader_info = vk::ShaderModuleCreateInfo::default().code(&vert_code);
@@ -623,7 +639,7 @@ pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {
 
     // Multisample State
     let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
-        .sample_shading_enable(true)
+        .sample_shading_enable(false)
         .min_sample_shading(0.2)
         .rasterization_samples(data.msaa_samples);
     
@@ -687,7 +703,7 @@ pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {
         .multisample_state(&multisample_state)
         .depth_stencil_state(&depth_stencil_state)
         .color_blend_state(&color_blend_state)
-        .dynamic_state(&dynamic_state_info)
+        // .dynamic_state(&dynamic_state_info)
         .layout(data.pipeline_layout)
         .render_pass(data.render_pass)
         .subpass(0);
@@ -740,7 +756,7 @@ pub fn create_command_pools(instance: &Instance, device: &Device, data: &mut Eng
 }
 
 pub fn create_command_pool(instance: &Instance, device: &Device, data: &mut EngineData, entry: &Entry, window: &dyn Window) -> Result<vk::CommandPool> {
-    let indices = unsafe { QueueFamilyIndices::get(entry, instance, data.physical_device, data)? };
+    let indices = unsafe { QueueFamilyIndices::get(instance, data.physical_device, data)? };
     let info = vk::CommandPoolCreateInfo::default()
         .flags(vk::CommandPoolCreateFlags::TRANSIENT)
         .queue_family_index(indices.graphics);
@@ -844,7 +860,7 @@ pub fn get_supported_format(instance: &Instance, data: &EngineData, candidates: 
 
 pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
     // Load 
-    let image = File::open("./resources/viking_room.png")?;
+    let image = File::open("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/resources/pic.png").expect("Failed to open PNG.");
     
     let decoder = png::Decoder::new(BufReader::new(image));
     let mut reader = decoder.read_info()?;
@@ -898,7 +914,7 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
         vk::Format::R8G8B8A8_SRGB, 
         vk::ImageLayout::UNDEFINED, 
         vk::ImageLayout::TRANSFER_DST_OPTIMAL, 
-        data.mip_levels,)?;
+        data.mip_levels,).expect("Failed to transition_image_layout");
     copy_buffer_to_image(device, data, staging_buffer, data.texture_image, width, height)?;
 
     // Cleanup
@@ -941,8 +957,8 @@ pub fn generate_mipmaps(instance: &Instance, device: &Device, data: &EngineData,
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .subresource_range(subresource);
-        let mut mip_width = width;
-        let mut mip_height = height;
+        let mut mip_width = 800;
+        let mut mip_height = 800;
 
         for i in 1..mip_levels {
             barrier.subresource_range.base_mip_level = i - 1;
@@ -1056,7 +1072,7 @@ pub fn create_texture_sampler(device: &Device, data: &mut EngineData) -> Result<
         .address_mode_u(vk::SamplerAddressMode::REPEAT)
         .address_mode_v(vk::SamplerAddressMode::REPEAT)
         .address_mode_w(vk::SamplerAddressMode::REPEAT)
-        .anisotropy_enable(true)
+        .anisotropy_enable(false)
         .max_anisotropy(16.0)
         .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
         .unnormalized_coordinates(false)
@@ -1077,13 +1093,13 @@ pub fn create_texture_sampler(device: &Device, data: &mut EngineData) -> Result<
 
 pub fn load_model(data: &mut EngineData) -> Result<()> {
     // Model
-    let viking_room = tobj::load_obj("./resources/viking_room.obj", &tobj::LoadOptions{triangulate: true, ..Default::default()});
+    let viking_room = tobj::load_obj("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/resources/viking_room.obj", &tobj::LoadOptions{triangulate: true, ..Default::default()});
     assert!(viking_room.is_ok());
     let (models, materials) = viking_room.expect("Failed to load OBJ file.");
-    let materials = materials.expect("Failed to load MTL file.");
+
     
     // INFO
-    println!("Number of models: {}", models.len());
+    /* println!("Number of models: {}", models.len());
     println!("Number of materials: {}", materials.len());
     for (i, m) in models.iter().enumerate() {
         let mesh = &m.mesh;
@@ -1108,7 +1124,7 @@ pub fn load_model(data: &mut EngineData) -> Result<()> {
                 mesh.positions[3 * v + 2],
             );
         }
-    }
+    } */
 
     // Vertices / Indices
     let mut unique_vertices = AHashMap::new();
@@ -1166,6 +1182,7 @@ pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut Eng
     unsafe { memcpy(data.vertices.as_ptr(), memory.cast(), data.vertices.len()) };
     unsafe { device.unmap_memory(staging_buffer_memory) };
     
+    
     // Create Vertex
     let (vertex_buffer, vertex_buffer_memory) = create_buffer(
         instance, 
@@ -1176,14 +1193,14 @@ pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut Eng
         vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
     data.vertex_buffer = vertex_buffer;
     data.vertex_buffer_memory = vertex_buffer_memory;
-
+    
     // Copy Vertex
     copy_buffer(device, data, staging_buffer, vertex_buffer, size)?;
-
+    
     // Cleanup
     unsafe { device.destroy_buffer(staging_buffer, None) };
     unsafe { device.free_memory(staging_buffer_memory, None) };
-
+    
     Ok(())
 }
 
@@ -1326,18 +1343,33 @@ pub fn create_command_buffers(device: &Device, data: &mut EngineData) -> Result<
 //====================
 
 pub fn create_sync_objects(device: &Device, data: &mut EngineData) -> Result<()> {
-    let semaphore_info = vk::SemaphoreCreateInfo::default();
-    let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+        for _ in 0..MAX_FRAMES_IN_FLIGHT {
+            let image_available_semaphore = {
+                let semaphore_info = vk::SemaphoreCreateInfo::default();
+                unsafe { device.create_semaphore(&semaphore_info, None).unwrap() }
+            };
 
-    for _ in 0..MAX_FRAMES_IN_FLIGHT {
-        data.image_available_semaphores.push(unsafe { device.create_semaphore(&semaphore_info, None) }?);
-        data.render_finished_semaphores.push(unsafe { device.create_semaphore(&semaphore_info, None) }?);
-        data.in_flight_fences.push(unsafe { device.create_fence(&fence_info, None) }?);
-    }
-    data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
+            let render_finished_semaphore = {
+                let semaphore_info = vk::SemaphoreCreateInfo::default();
+                unsafe { device.create_semaphore(&semaphore_info, None).unwrap() }
+            };
+
+            let in_flight_fence = {
+                let fence_info =
+                    vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+                unsafe { device.create_fence(&fence_info, None).unwrap() }
+            };
+        data.image_available_semaphores.push(image_available_semaphore);
+        data.render_finished_semaphores.push(render_finished_semaphore);
+        data.in_flight_fences.push(in_flight_fence);
+        };
+
+        // data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
 
     Ok(())
+            
 }
+
 
 //====================
 // Shared Buffers
@@ -1436,6 +1468,7 @@ pub fn transition_image_layout(device: &Device, data: &EngineData, image: vk::Im
     };
 
     let command_buffer = begin_single_time_commands(device, data)?;
+
     let subresource = vk::ImageSubresourceRange::default()
         .aspect_mask(vk::ImageAspectFlags::COLOR)
         .base_mip_level(0)
