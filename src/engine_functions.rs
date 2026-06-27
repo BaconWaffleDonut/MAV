@@ -1,5 +1,5 @@
 #![allow(dead_code, unsafe_op_in_unsafe_fn)]
-use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor}};
+use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor, empty}, ptr::null};
 use std::ptr::copy_nonoverlapping as memcpy;
 use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
@@ -137,9 +137,8 @@ pub struct SuitabilityError(pub &'static str);
 // Instance
 //====================
 
-pub fn create_instance(data: &mut EngineData, window: &dyn Window, entry: &Entry, event_loop: &dyn ActiveEventLoop) -> Result<Instance> {
+pub fn create_instance(data: &mut EngineData, event_loop: &dyn ActiveEventLoop) -> Result<Instance> {
     let entry = unsafe{Entry::load().expect("Failed to load vulkan Entry.")};
-    // let event_loop = Utils::event_loop().expect("Failed to fetch event loop.");
     // Application Info
     let application_info = vk::ApplicationInfo::default()
         .application_name(APP_NAME)
@@ -234,9 +233,10 @@ extern "system" fn vulkan_debug_callback(
 
 pub fn pick_physical_device(instance: &Instance, entry: &Entry, data: &mut EngineData, event_loop: &dyn ActiveEventLoop, window: &dyn Window) -> Result<(u32, PhysicalDevice)> {
     // Import surface and surface loader to get requirements. 
-    let surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
     let surface_loader = surface::Instance::new(&entry, &instance);
 
+    data.surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
+    let surface = data.surface;
     // Select and check physical device.
     let physical_devices = unsafe { instance.enumerate_physical_devices().expect("Physical Device Error") };
     let (physical_device, queue_family_index) = physical_devices
@@ -353,7 +353,7 @@ pub fn create_logical_device(instance: &Instance, data: &mut EngineData) -> Resu
 // Swapchain
 //====================
 
-pub fn create_swapchain(instance: &Instance, device: &Device, data: &mut EngineData, width: u32, height: u32, window: &dyn Window, entry: &Entry, event_loop: &dyn ActiveEventLoop) -> Result<()> {
+/* pub fn create_swapchain(instance: &Instance, device: &Device, data: &mut EngineData, width: u32, height: u32, window: &dyn Window, entry: &Entry, event_loop: &dyn ActiveEventLoop) -> Result<()> {
     // Setup
     let indices = unsafe { QueueFamilyIndices::get(instance, data.physical_device, data) }?;
     let surface_capabilites = unsafe { data.surface_loader.as_ref().unwrap().get_physical_device_surface_capabilities(data.physical_device, data.surface).unwrap() };
@@ -449,6 +449,119 @@ pub fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::Sur
         .find(|f| f .format == vk::Format::B8G8R8A8_SRGB && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
         .unwrap_or_else(|| formats[0])
 }
+*/
+
+pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Device) {
+    // Setup 
+    let surface = data.surface_loader.as_ref().unwrap();
+    let surface_khr = data.surface;
+    let physical_device = data.physical_device;
+    let capabilities = unsafe {surface.get_physical_device_surface_capabilities(physical_device, surface_khr).unwrap()};
+    let formats = unsafe {surface.get_physical_device_surface_formats(physical_device, surface_khr).unwrap()};
+    let present_modes = unsafe {surface.get_physical_device_surface_present_modes(physical_device, surface_khr).unwrap()};
+
+    // Clear Sync Objects
+
+    data.in_flight_fences.iter().for_each(|f| unsafe { device.destroy_fence(*f, None) });
+    data.render_finished_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
+    data.image_available_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
+    println!("SWAPCHAIN: Cleared Sync Objects");
+    
+    // Choose Swapchain Surface Format
+    let format = get_swapchain_surface_format(&formats);
+    println!("SWAPCHAIN: Using Format: {:?}", format);
+    
+    // Choose Swapchain Present Mode
+    // Prefer MAILBOX -> FIFO -> IMMEDIATE
+    let present_mode = get_swapchain_present_mode(&present_modes);
+    println!("SWAPCHAIN: Using Present Mode: {:?}", present_mode);
+
+    // Choose Swapchain Extent
+    let extent = get_swapchain_extent(capabilities, data.resize_dimension);
+    println!("SWAPCHAIN: Using Extent: {:?}", extent);
+
+    // Final Setup
+    let image_count = {
+        let max = capabilities.max_image_count;
+        let mut preffered = capabilities.min_image_count + 1;
+        if max > 0 && preffered > max {
+            preffered = max
+        }
+        preffered
+    };
+    
+    let indices = unsafe { QueueFamilyIndices::get(&instance, physical_device, &data).unwrap() };
+    let graphics = indices.graphics;
+    let present = indices.present;
+    let queue_family_indices = [graphics, present];
+
+    let create_info = {
+        let mut builder = vk::SwapchainCreateInfoKHR::default()
+            .surface(surface_khr)
+            .min_image_count(image_count)
+            .image_format(format.format)
+            .image_color_space(format.color_space)
+            .image_extent(extent)
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT);
+        builder = if graphics != present {
+            builder
+                .image_sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(&queue_family_indices)
+        } else {
+            builder.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        };
+        builder
+            .pre_transform(capabilities.current_transform)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(present_mode)
+            .clipped(true)
+    };
+
+    // Create
+    let swapchain_loader = swapchain::Device::new(instance, device);
+    data.swapchain = unsafe { swapchain_loader.create_swapchain(&create_info, None).expect("SWAPCHAIN: Failed to create Swapchain!") };
+    data.swapchain_images = unsafe { swapchain_loader.get_swapchain_images(data.swapchain).unwrap() };
+    data.swapchain_loader = Some(swapchain_loader);
+    data.swapchain_format = format.format;
+    data.swapchain_extent = extent;
+
+
+}
+
+pub fn get_swapchain_present_mode(present_modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
+    if present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+        vk::PresentModeKHR::MAILBOX
+    } else if present_modes.contains(&vk::PresentModeKHR::FIFO) {
+        vk::PresentModeKHR::FIFO
+    } else {
+        vk::PresentModeKHR::IMMEDIATE
+    }
+} 
+
+pub fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {
+    if formats.len() == 1 && formats[0].format == vk::Format::UNDEFINED {
+        return vk::SurfaceFormatKHR {
+            format: vk::Format::B8G8R8A8_UNORM,
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        };
+    }
+    *formats.iter().find(|format| {
+        format.format == vk::Format::B8G8R8A8_UNORM && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+    }).unwrap_or(&formats[0])
+}
+
+pub fn get_swapchain_extent(capabilities: vk::SurfaceCapabilitiesKHR, dimensions: [u32; 2]) -> vk::Extent2D {
+    if capabilities.current_extent.width != u32::MAX {
+        return capabilities.current_extent;
+    }
+
+    let min = capabilities.min_image_extent;
+    let max = capabilities.max_image_extent;
+    let width = dimensions[0].min(max.width).max(min.width);
+    let height = dimensions[1].min(max.height).max(min.height);
+    vk::Extent2D {width, height}
+}
 
 pub fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> Result<()> {
     let present_image_views: Vec<vk::ImageView> = data.swapchain_images
@@ -479,8 +592,8 @@ pub fn create_swapchain_image_views(device: &Device, data: &mut EngineData) -> R
 
     Ok(())
 }
-
-//====================
+ 
+ //====================
 // Pipeline
 //====================
 
@@ -1097,35 +1210,6 @@ pub fn load_model(data: &mut EngineData) -> Result<()> {
     assert!(viking_room.is_ok());
     let (models, materials) = viking_room.expect("Failed to load OBJ file.");
 
-    
-    // INFO
-    /* println!("Number of models: {}", models.len());
-    println!("Number of materials: {}", materials.len());
-    for (i, m) in models.iter().enumerate() {
-        let mesh = &m.mesh;
-        println!("model[{}].name = \'{}\'", i, m.name);
-        println!("model[{}].mesh.material_id = {:?}", i, mesh.material_id);
-        println!("Size of model[{}].face_arities: {}", i, mesh.face_arities.len());
-        let mut next_face = 0;
-        for f in 0..mesh.face_arities.len() {
-            let end = next_face + mesh.face_arities[f] as usize;
-            let face_indices: Vec<_> = mesh.indices[next_face..end].iter().collect();
-            println!("    face[{}] = {:?}", f, face_indices);
-            next_face = end;
-        }
-        println!("model[{}].vertices: {}", i, mesh.positions.len() / 3);
-        assert!(mesh.positions.len() % 3 == 0);
-        for v in 0..mesh.positions.len() / 3 {
-            println!(
-                "   v[{}] = ({}, {}, {})",
-                v,
-                mesh.positions[3 * v],
-                mesh.positions[3 * v + 1],
-                mesh.positions[3 * v + 2],
-            );
-        }
-    } */
-
     // Vertices / Indices
     let mut unique_vertices = AHashMap::new();
     for model in &models {
@@ -1251,7 +1335,7 @@ pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut E
             instance, 
             device, 
             data, 
-            size_of::<UniformBufferObject>() as u64, 
+            size_of::<UniformBufferObject>() as vk::DeviceSize, 
             vk::BufferUsageFlags::UNIFORM_BUFFER, 
             vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
         data.uniform_buffers.push(uniform_buffer);
@@ -1363,8 +1447,7 @@ pub fn create_sync_objects(device: &Device, data: &mut EngineData) -> Result<()>
         data.render_finished_semaphores.push(render_finished_semaphore);
         data.in_flight_fences.push(in_flight_fence);
         };
-
-        // data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
+        data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
 
     Ok(())
             
