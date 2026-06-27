@@ -4,6 +4,7 @@ use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use cgmath::{Deg, point3, vec3};
+use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, StartCause};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{self, ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
@@ -13,6 +14,8 @@ use crate::engine_functions::*;
 
 const MAX_FRAMES_IN_FLIGHT: usize = 3;
 type Mat4 = cgmath::Matrix4<f32>;
+const WIDTH: u32 = 800;
+const HEIGHT: u32 = 800;
 
 
 #[path = "util/file.rs"]
@@ -36,7 +39,7 @@ fn main() -> Result<()> {
 #[derive(Default)]
 struct App {
     window: Option<Box<dyn Window>>,
-    vulkan: Option<EngineData>,
+    vulkan: Option<Box<EngineData>>,
     app: Option<Engine>
 }
 
@@ -61,8 +64,10 @@ impl ApplicationHandler for App {
                 //Draw, using temporary full color window for testing
                 unsafe{self.app.as_mut().unwrap().render().expect("Failed to render...")};
                 //Can use window.request_redraw(); for continous loop
+                window.request_redraw();
             },
             WindowEvent::KeyboardInput { event, .. } => {
+                println!("Key Pressed: {:?}", self.app.as_ref().unwrap().models);
                 if event.state == ElementState::Pressed {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::ArrowLeft) if self.app.as_mut().unwrap().models > 1 => self.app.as_mut().unwrap().models -= 1,
@@ -76,7 +81,7 @@ impl ApplicationHandler for App {
         }
     }
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
-        let window_attributes = WindowAttributes::default().with_title("M.A.V");
+        let window_attributes = WindowAttributes::default().with_title("M.A.V").with_surface_size(PhysicalSize::new(WIDTH, HEIGHT));
         let window = match event_loop.create_window(window_attributes) {
             Ok(window) => window,
             Err(err) => {
@@ -88,6 +93,22 @@ impl ApplicationHandler for App {
         let app = unsafe { Engine::create( window.as_ref(), event_loop).expect("Failed to create application.") };
         self.app = Some(app);
         self.window = Some(window);
+    }
+
+    fn about_to_wait(&mut self, _: &dyn ActiveEventLoop) {
+        let app = self.app.as_mut().unwrap();
+        let window = self.window.as_ref().unwrap();
+
+        if app.resized {
+            let size = window.surface_size();
+            if size.width > 0 && size.height > 0 {
+                app.resize_dimensions = [size.width, size.height];
+                unsafe { app.recreate_swapchain() };
+            } else {
+                return;
+            }
+        }
+        app.resized = unsafe { app.render().unwrap() };
     }
 }
 
@@ -106,6 +127,7 @@ struct Engine {
     resized: bool,
     start: Instant,
     models: usize,
+    resize_dimensions: [u32; 2],
 }
 
 impl Engine {
@@ -120,11 +142,17 @@ impl Engine {
         println!("Created Entry");
         let instance = create_instance(&mut data, event_loop).expect("MAIN: Failed to create Instace.");
         println!("Created Instace");
-        pick_physical_device(&instance, &entry, &mut data, event_loop, window).expect("MAIN: Failed to pick Physical Device");
+        data.surface = unsafe{ash_window::create_surface(
+            &entry, 
+            &instance, 
+            event_loop.display_handle()?.as_raw(), 
+            window.window_handle()?.as_raw(), 
+            None)}.expect("Failed to create surface.");
+        pick_physical_device(&instance, &entry, &mut data).expect("MAIN: Failed to pick Physical Device");
         println!("Picked phyiscal device");
         let device = create_logical_device(&instance, &mut data).expect("MAIN: Failed to create Logical Device");
         println!("Created Device");
-        create_swapchain(&mut data, &instance, &device)/* .expect("MAIN: Failed to create Swapchain") */;
+        create_swapchain(&mut data, &instance, &device, [WIDTH, HEIGHT])/* .expect("MAIN: Failed to create Swapchain") */;
         println!("Created Swapchain");
         create_swapchain_image_views(&device, &mut data).expect("MAIN: Failed to create Swapchain Image Views.");
         println!("Created Swapchain Image Views");
@@ -165,6 +193,7 @@ impl Engine {
         create_sync_objects(&device, &mut data).expect("MAIN: Failed to create Sync Objects.");
         println!("Created Sync Objects");
         // data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
+        let resize_dimensions = data.resize_dimension;
         Ok(Self {
             entry,
             instance,
@@ -174,12 +203,12 @@ impl Engine {
             resized: false,
             start: Instant::now(),
             models: 1,
+            resize_dimensions: [WIDTH, HEIGHT],
         })
     }
     
     // Render a frame
-    unsafe fn render(&mut self) -> Result<()> {
-        println!("Drawing Frame.");
+    unsafe fn render(&mut self) -> Result<bool> {
         let in_flight_fence = self.data.in_flight_fences[self.frame];
         let image_available_semaphores = self.data.image_available_semaphores[self.frame];
         let render_finished_semaphores = self.data.render_finished_semaphores[self.frame];
@@ -231,47 +260,8 @@ impl Engine {
                 _ => {}
             }
         }
-        
 
-        // };
-        // 
-        // (unsafe { self.device.reset_fences(&[in_flight_fence]).unwrap() });
-        // 
-        // (unsafe { self.update_command_buffer(image_index) })?;
-        // (unsafe { self.update_uniform_buffer(image_index) })?;
-// 
-        // let wait_semaphores = &[self.data.image_available_semaphores[self.frame]];
-        // let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        // let command_buffers = &[self.data.command_buffers[image_index]];
-        // let signal_semaphores = &[self.data.render_finished_semaphores[self.frame]];
-        // let submit_info = vk::SubmitInfo::default()
-            // .wait_semaphores(wait_semaphores)
-            // .wait_dst_stage_mask(wait_stages)
-            // .command_buffers(command_buffers)
-            // .signal_semaphores(signal_semaphores);
-// 
-        // (unsafe { self.device.reset_fences(&[in_flight_fence]) })?;
-        // (unsafe { self.device.queue_submit(self.data.graphics_queue, &[submit_info], in_flight_fence) })?;
-// 
-        // let swapchains = &[self.data.swapchain];
-        // let image_indices = &[image_index as u32];
-        // let present_info = vk::PresentInfoKHR::default()
-            // .wait_semaphores(signal_semaphores)
-            // .swapchains(swapchains)
-            // .image_indices(image_indices);
-// 
-        // let result = unsafe { self.data.swapchain_loader.as_ref().unwrap().queue_present(self.data.present_queue, &present_info) };
-        // let changed = result == Err(vk::Result::SUBOPTIMAL_KHR) || result == Err(vk::Result::ERROR_OUT_OF_DATE_KHR);
-        // if self.resized || changed {
-            // self.resized = false;
-            // (unsafe { self.recreate_swapchain(data)})?;
-        // } else if let Err(e) = result {
-            // return Err(anyhow!("MAIN: {}", e));
-        // }
-// 
-        // self.frame = (self.frame + 1) % MAX_FRAMES_IN_FLIGHT;
-
-        Ok(())
+        Ok(true)
     }
 
     // Update Command Buffer
@@ -397,11 +387,11 @@ impl Engine {
     }
 
     // Recreate the Swapchain
-    unsafe fn recreate_swapchain(&mut self) -> Result<()> {
-        println!("Recreated Swapchain.");
+    unsafe fn recreate_swapchain(&mut self) -> Result<bool> {
         unsafe { self.device.device_wait_idle() }?;
-        unsafe { self.destroy_swapchain() };    
-        create_swapchain(&mut self.data, &self.instance, &self.device);
+        unsafe { self.destroy_swapchain() };
+        let dimensions = self.resize_dimensions;
+        create_swapchain(&mut self.data, &self.instance, &self.device, dimensions);
         create_swapchain_image_views(&self.device, &mut self.data)?;
         create_render_pass(&self.instance, &self.device, &mut self.data)?;
         create_pipeline(&self.device, &mut self.data)?;
@@ -412,7 +402,7 @@ impl Engine {
         create_descriptor_pool(&self.device, &mut self.data)?;
         create_descriptor_sets(&self.device, &mut self.data)?;
         self.data.images_in_flight.resize(self.data.swapchain_images.len(), vk::Fence::null());
-        Ok(())
+        Ok(false)
 
     }
 
@@ -463,7 +453,7 @@ impl Engine {
         unsafe { self.device.destroy_pipeline_layout(self.data.pipeline_layout, None) };
         unsafe { self.device.destroy_render_pass(self.data.render_pass, None) };
         self.data.swapchain_image_views.iter().for_each(|v| unsafe { self.device.destroy_image_view(*v, None) });
-        // unsafe { self.data.swapchain_loader.destroy_swapchain(self.data.swapchain, None) };
+        unsafe { self.data.swapchain_loader.as_ref().unwrap().destroy_swapchain(self.data.swapchain, None) };
     }
 
     //

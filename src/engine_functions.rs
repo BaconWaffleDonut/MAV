@@ -231,11 +231,9 @@ extern "system" fn vulkan_debug_callback(
 // Physical Device
 //====================
 
-pub fn pick_physical_device(instance: &Instance, entry: &Entry, data: &mut EngineData, event_loop: &dyn ActiveEventLoop, window: &dyn Window) -> Result<(u32, PhysicalDevice)> {
+pub fn pick_physical_device(instance: &Instance, entry: &Entry, data: &mut EngineData) -> Result<(u32, PhysicalDevice)> {
     // Import surface and surface loader to get requirements. 
     let surface_loader = surface::Instance::new(&entry, &instance);
-
-    data.surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
     let surface = data.surface;
     // Select and check physical device.
     let physical_devices = unsafe { instance.enumerate_physical_devices().expect("Physical Device Error") };
@@ -451,7 +449,7 @@ pub fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::Sur
 }
 */
 
-pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Device) {
+pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Device, resize_dimension: [u32; 2]) {
     // Setup 
     let surface = data.surface_loader.as_ref().unwrap();
     let surface_khr = data.surface;
@@ -462,22 +460,22 @@ pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Dev
 
     // Clear Sync Objects
 
-    data.in_flight_fences.iter().for_each(|f| unsafe { device.destroy_fence(*f, None) });
-    data.render_finished_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
-    data.image_available_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
-    println!("SWAPCHAIN: Cleared Sync Objects");
+    // data.in_flight_fences.iter().for_each(|f| unsafe { device.destroy_fence(*f, None) });
+    // data.render_finished_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
+    // data.image_available_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
+    // println!("SWAPCHAIN: Cleared Sync Objects");
     
     // Choose Swapchain Surface Format
     let format = get_swapchain_surface_format(&formats);
-    println!("SWAPCHAIN: Using Format: {:?}", format);
+    // println!("SWAPCHAIN: Using Format: {:?}", format);
     
     // Choose Swapchain Present Mode
     // Prefer MAILBOX -> FIFO -> IMMEDIATE
     let present_mode = get_swapchain_present_mode(&present_modes);
-    println!("SWAPCHAIN: Using Present Mode: {:?}", present_mode);
+    // println!("SWAPCHAIN: Using Present Mode: {:?}", present_mode);
 
     // Choose Swapchain Extent
-    let extent = get_swapchain_extent(capabilities, data.resize_dimension);
+    let extent = get_swapchain_extent(capabilities, resize_dimension);
     println!("SWAPCHAIN: Using Extent: {:?}", extent);
 
     // Final Setup
@@ -525,7 +523,6 @@ pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Dev
     data.swapchain_loader = Some(swapchain_loader);
     data.swapchain_format = format.format;
     data.swapchain_extent = extent;
-
 
 }
 
@@ -882,6 +879,7 @@ pub fn create_command_pool(instance: &Instance, device: &Device, data: &mut Engi
 
 pub fn create_color_objects(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
     // Image + Image Memory
+    let format = data.swapchain_format;
     let (color_image, color_image_memory) = create_image(
         instance, 
         device, 
@@ -890,13 +888,22 @@ pub fn create_color_objects(instance: &Instance, device: &Device, data: &mut Eng
         data.swapchain_extent.height, 
         1, 
         data.msaa_samples, 
-        data.swapchain_format, 
+        format, 
         vk::ImageTiling::OPTIMAL, 
         vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
 
     data.color_image = color_image;
     data.color_image_memory = color_image_memory;
+
+    transition_image_layout(
+        device, 
+        data, 
+        data.color_image, 
+        format, 
+        vk::ImageLayout::UNDEFINED, 
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, 
+        1).expect("Failed to transition image layout.");
 
     // Image View
     data.color_image_view = create_image_view(
@@ -1546,6 +1553,12 @@ pub fn transition_image_layout(device: &Device, data: &EngineData, image: vk::Im
             vk::AccessFlags::SHADER_READ,
             vk::PipelineStageFlags::TRANSFER,
             vk::PipelineStageFlags::FRAGMENT_SHADER,
+        ),
+        (vk::ImageLayout::UNDEFINED, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL) => (
+            vk::AccessFlags::empty(),
+            vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
         ),
         _ => return Err(anyhow!("Unsupported image transition layout!")),
     };
