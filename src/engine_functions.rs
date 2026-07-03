@@ -6,6 +6,7 @@ use ahash::{AHashMap, AHashSet};
 use ash::{
     Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::PhysicalDevice, vk};
 use cgmath::{vec2, vec3};
+use vk_mem::{Alloc, Allocation, Allocator, AllocatorCreateInfo};
 use winit::{
     event_loop::ActiveEventLoop, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::Window};
 use anyhow::{Ok, Result, anyhow};
@@ -476,7 +477,7 @@ pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Dev
 
     // Choose Swapchain Extent
     let extent = get_swapchain_extent(capabilities, resize_dimension);
-    println!("SWAPCHAIN: Using Extent: {:?}", extent);
+    // println!("SWAPCHAIN: Using Extent: {:?}", extent);
 
     // Final Setup
     let image_count = {
@@ -892,18 +893,18 @@ pub fn create_color_objects(instance: &Instance, device: &Device, data: &mut Eng
         vk::ImageTiling::OPTIMAL, 
         vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
-
+        
     data.color_image = color_image;
     data.color_image_memory = color_image_memory;
 
-    transition_image_layout(
-        device, 
-        data, 
-        data.color_image, 
-        format, 
-        vk::ImageLayout::UNDEFINED, 
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, 
-        1).expect("Failed to transition image layout.");
+    // transition_image_layout(
+    //     device, 
+    //     data, 
+    //     data.color_image, 
+    //     format, 
+    //     vk::ImageLayout::UNDEFINED, 
+    //     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, 
+    //     1).expect("Failed to transition image layout.");
 
     // Image View
     data.color_image_view = create_image_view(
@@ -981,7 +982,6 @@ pub fn get_supported_format(instance: &Instance, data: &EngineData, candidates: 
 pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
     // Load 
     let image = File::open("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/resources/pic.png").expect("Failed to open PNG.");
-    
     let decoder = png::Decoder::new(BufReader::new(image));
     let mut reader = decoder.read_info()?;
     
@@ -997,18 +997,19 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
     }
 
     // Create Staging
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
-        instance, 
-        device, 
+    let (staging_buffer, mut staging_buffer_memory) = create_buffer(
         data, 
+        device, 
+        data.physical_device, 
+        instance, 
         size, 
-        vk::BufferUsageFlags::TRANSFER_SRC, 
-        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        vk::MemoryPropertyFlags::empty()).expect("Failed to create staging buffers for Texture Image!");
 
     // Copy Stating
-    let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
-    unsafe { memcpy(pixels.as_ptr(), memory.cast(), pixels.len()) };
-    unsafe { device.unmap_memory(staging_buffer_memory) };
+    // let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
+    // unsafe { memcpy(pixels.as_ptr(), memory.cast(), pixels.len()) };
+    // unsafe { device.unmap_memory(staging_buffer_memory) };
 
     // Create Image
     let (texture_image, texture_image_memory) = create_image(
@@ -1038,8 +1039,10 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
     copy_buffer_to_image(device, data, staging_buffer, data.texture_image, width, height)?;
 
     // Cleanup
-    unsafe { device.destroy_buffer(staging_buffer, None) };
-    unsafe { device.free_memory(staging_buffer_memory, None) };
+    let allocator = data.allocator.as_mut().unwrap();
+    unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
+    // unsafe { device.destroy_buffer(staging_buffer, None) };
+    // unsafe { device.free_memory(staging_buffer_memory, None) };
 
     // Mipmaps
     generate_mipmaps(
@@ -1259,29 +1262,30 @@ pub fn load_model(data: &mut EngineData) -> Result<()> {
 pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
     // Create Staging
     let size = (size_of::<Vertex>() * data.vertices.len()) as u64;
-
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
-        instance, 
-        device, 
-        data, 
-        size, 
-        vk::BufferUsageFlags::TRANSFER_SRC, 
-        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
+    let (staging_buffer, mut staging_buffer_memory) = create_buffer(
+    data,
+    device,
+    data.physical_device,
+    instance,
+    size,
+    vk::BufferUsageFlags::TRANSFER_SRC,
+    vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
     
     // Copy Staging
-    let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
-    unsafe { memcpy(data.vertices.as_ptr(), memory.cast(), data.vertices.len()) };
-    unsafe { device.unmap_memory(staging_buffer_memory) };
-    
+    // let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
+    // unsafe { memcpy(data.vertices.as_ptr(), memory.cast(), data.vertices.len()) };
+    // unsafe { device.unmap_memory(staging_buffer_memory) };   
     
     // Create Vertex
-    let (vertex_buffer, vertex_buffer_memory) = create_buffer(
-        instance, 
-        device, 
-        data, 
-        size, 
+    let (vertex_buffer, vertex_buffer_memory) = create_buffer( 
+        data,
+        device,
+        data.physical_device,
+        instance,
+        size,
         vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+        let vertex_buffer_memory = data.allocator.as_mut().unwrap().get_allocation_info(&vertex_buffer_memory).device_memory;
     data.vertex_buffer = vertex_buffer;
     data.vertex_buffer_memory = vertex_buffer_memory;
     
@@ -1289,8 +1293,9 @@ pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut Eng
     copy_buffer(device, data, staging_buffer, vertex_buffer, size)?;
     
     // Cleanup
-    unsafe { device.destroy_buffer(staging_buffer, None) };
-    unsafe { device.free_memory(staging_buffer_memory, None) };
+    unsafe { data.allocator.as_mut().unwrap().destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
+    // unsafe { device.destroy_buffer(staging_buffer, None) };
+    // unsafe { device.free_memory(staging_buffer_memory, None) };
     
     Ok(())
 }
@@ -1299,27 +1304,30 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
     // Create Staging
     let size = (size_of::<u32>() * data.indices.len()) as u64;
 
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
-        instance, 
-        device, 
-        data, 
-        size, 
+    let (staging_buffer, mut staging_buffer_memory) = create_buffer(
+        data,
+        device,
+        data.physical_device,
+        instance,
+        size,
         vk::BufferUsageFlags::TRANSFER_SRC, 
         vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
     
     // Copy Staging
-    let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
-    unsafe { memcpy(data.indices.as_ptr(), memory.cast(), data.indices.len()) };
-    unsafe { device.unmap_memory(staging_buffer_memory) };
+    // let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
+    // unsafe { memcpy(data.indices.as_ptr(), memory.cast(), data.indices.len()) };
+    // unsafe { device.unmap_memory(staging_buffer_memory) };
 
     // Create Index
     let (index_buffer, index_buffer_memory) = create_buffer(
-        instance, 
-        device, 
-        data, 
-        size, 
+        data,
+        device,
+        data.physical_device,
+        instance,
+        size,
         vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+    let index_buffer_memory = data.allocator.as_mut().unwrap().get_allocation_info(&index_buffer_memory).device_memory;
     data.index_buffer = index_buffer;
     data.index_buffer_memory = index_buffer_memory;
 
@@ -1327,8 +1335,9 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
     copy_buffer(device, data, staging_buffer, index_buffer, size)?;
 
     // Cleanup
-    unsafe { device.destroy_buffer(staging_buffer, None) };
-    unsafe { device.free_memory(staging_buffer_memory, None) };
+    unsafe { data.allocator.as_mut().unwrap().destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
+    // unsafe { device.destroy_buffer(staging_buffer, None) };
+    // unsafe { device.free_memory(staging_buffer_memory, None) };
 
     Ok(())
 }
@@ -1336,16 +1345,19 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
 pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> {
     data.uniform_buffers.clear();
     data.uniform_buffers_memory.clear();
+    // let allocator = data.allocator.as_mut().unwrap();
 
     for _ in 0..data.swapchain_images.len() {
         let (uniform_buffer, uniform_buffer_memory) = create_buffer(
-            instance, 
-            device, 
-            data, 
+            data,
+            device,
+            data.physical_device,
+            instance,
             size_of::<UniformBufferObject>() as vk::DeviceSize, 
             vk::BufferUsageFlags::UNIFORM_BUFFER, 
             vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
         data.uniform_buffers.push(uniform_buffer);
+        let uniform_buffer_memory = data.allocator.as_mut().unwrap().get_allocation_info(&uniform_buffer_memory).device_memory;
         data.uniform_buffers_memory.push(uniform_buffer_memory);
     }
     Ok(())
@@ -1375,7 +1387,8 @@ pub fn create_descriptor_pool(device: &Device, data: &mut EngineData) -> Result<
 
 pub fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> Result<()> {
     // Allocate
-    let layouts = vec![data.descriptor_set_layout; data.swapchain_images.len()];
+    // let layouts = vec![data.descriptor_set_layout; data.swapchain_images.len()];
+    let layouts = (0..data.uniform_buffers.len()).map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(data.descriptor_pool)
         .set_layouts(&layouts);
@@ -1465,22 +1478,30 @@ pub fn create_sync_objects(device: &Device, data: &mut EngineData) -> Result<()>
 // Shared Buffers
 //====================
 
-pub fn create_buffer(instance: &Instance, device: &Device, data: &EngineData, size: vk::DeviceSize, usage: vk::BufferUsageFlags, properties: vk::MemoryPropertyFlags) -> Result<(vk::Buffer, vk::DeviceMemory)> {
-    // Buffer
+pub fn create_buffer(data: &mut EngineData, device: &Device, physical_device:PhysicalDevice, instance: &Instance, size: vk::DeviceSize, usage: vk::BufferUsageFlags, preferred_flags: vk::MemoryPropertyFlags ) -> Result<(vk::Buffer, Allocation)> {
+    // Allocator
+    let allocator_info = AllocatorCreateInfo::new(
+        instance, 
+        device, 
+        physical_device);
+    let allocator = unsafe { Allocator::new(allocator_info).expect("Failed to create allocator!") };
+
+    // Create Buffer Info 
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let buffer = unsafe { device.create_buffer(&buffer_info, None) }?;
+    let alloc_info =  vk_mem::AllocationCreateInfo {
+        usage: vk_mem::MemoryUsage::Auto,
+        preferred_flags,
+        ..Default::default()
+    };
 
-    // Memory
-    let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let memory_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(requirements.size)
-        .memory_type_index(get_memory_type_index(instance, data, properties, requirements)?);
-    let buffer_memory = unsafe { device.allocate_memory(&memory_info, None) }?;
-    (unsafe { device.bind_buffer_memory(buffer, buffer_memory, 0) })?;
-    Ok((buffer, buffer_memory))
+    // Create Buffer
+    let (buffer, allocation) = unsafe { allocator.create_buffer(&buffer_info, &alloc_info).expect("Failed to create buffer!") };
+    data.allocator = Some(allocator);
+    Ok((buffer, allocation))
+    
 }
 
 pub fn copy_buffer(device: &Device, data: &EngineData, source: vk::Buffer, destination: vk::Buffer, size: vk::DeviceSize) -> Result<()> {

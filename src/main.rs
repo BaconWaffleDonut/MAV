@@ -1,9 +1,9 @@
 use std::{time::Instant, u64};
-use std::ptr::copy_nonoverlapping as memcpy;
 use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use cgmath::{Deg, point3, vec3};
+use vk_mem::Allocator;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, StartCause};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -80,6 +80,7 @@ impl ApplicationHandler for App {
             _ => (),
         }
     }
+    
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let window_attributes = WindowAttributes::default().with_title("M.A.V").with_surface_size(PhysicalSize::new(WIDTH, HEIGHT));
         let window = match event_loop.create_window(window_attributes) {
@@ -193,7 +194,6 @@ impl Engine {
         create_sync_objects(&device, &mut data).expect("MAIN: Failed to create Sync Objects.");
         println!("Created Sync Objects");
         // data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
-        let resize_dimensions = data.resize_dimension;
         Ok(Self {
             entry,
             instance,
@@ -214,7 +214,7 @@ impl Engine {
         let render_finished_semaphores = self.data.render_finished_semaphores[self.frame];
         let wait_fences = [in_flight_fence];
 
-        self.device.wait_for_fences(&wait_fences, false, u64::MAX).unwrap();
+        self.device.wait_for_fences(&wait_fences, true, u64::MAX).unwrap();
 
         let result = self.data.swapchain_loader.as_ref().unwrap().acquire_next_image(self.data.swapchain, u64::MAX, image_available_semaphores, vk::Fence::null());
         
@@ -226,7 +226,7 @@ impl Engine {
         self.device.reset_fences(&wait_fences).unwrap();
 
         self.update_command_buffer(image_index as usize);
-        self.update_uniform_buffer(image_index);
+        self.update_uniform_buffer(image_index);     
         let device = &self.device;
         let wait_semaphores = [image_available_semaphores];
         let signal_sempahores = [render_finished_semaphores];
@@ -366,12 +366,6 @@ impl Engine {
             0.0, 0.0, 1.0 / 2.0, 1.0);
         let proj = correction * cgmath::perspective(Deg(45.0), aspect, 0.1, 10.0);
         let ubo = UniformBufferObject { view, proj };
-
-        // Copy
-        // let size = size_of::<UniformBufferObject> as vk::DeviceSize;
-        // let memory = unsafe { self.device.map_memory(self.data.uniform_buffers_memory[image_index as usize], 0, size, vk::MemoryMapFlags::empty()).unwrap() };
-        // unsafe { memcpy(&ubo, memory.cast(), 1) };
-        // unsafe { self.device.unmap_memory(self.data.uniform_buffers_memory[image_index as usize]) };
         
         let ubos = [ubo];
         let buffer_mem = self.data.uniform_buffers_memory[image_index as usize];
@@ -398,9 +392,9 @@ impl Engine {
         create_color_objects(&self.instance, &self.device, &mut self.data)?;
         create_depth_objects(&self.instance, &self.device, &mut self.data)?;
         create_framebuffers(&self.device, &mut self.data)?;
-        create_uniform_buffers(&self.instance, &self.device, &mut self.data)?;
-        create_descriptor_pool(&self.device, &mut self.data)?;
-        create_descriptor_sets(&self.device, &mut self.data)?;
+        // create_uniform_buffers(&self.instance, &self.device, &mut self.data)?;
+        // create_descriptor_pool(&self.device, &mut self.data)?;
+        // create_descriptor_sets(&self.device, &mut self.data)?;
         self.data.images_in_flight.resize(self.data.swapchain_images.len(), vk::Fence::null());
         Ok(false)
 
@@ -440,9 +434,9 @@ impl Engine {
 
     // Destroy Swapchain
     unsafe fn destroy_swapchain(&mut self) {
-        unsafe { self.device.destroy_descriptor_pool(self.data.descriptor_pool, None) };
-        self.data.uniform_buffers_memory.iter().for_each(|m| unsafe { self.device.free_memory(*m, None) });
-        self.data.uniform_buffers.iter().for_each(|b| unsafe { self.device.destroy_buffer(*b, None) });
+        // unsafe { self.device.destroy_descriptor_pool(self.data.descriptor_pool, None) };
+        // self.data.uniform_buffers_memory.iter().for_each(|m| unsafe { self.device.free_memory(*m, None) });
+        // self.data.uniform_buffers.iter().for_each(|b| unsafe { self.device.destroy_buffer(*b, None) });
         unsafe { self.device.destroy_image_view(self.data.depth_image_view, None) };
         unsafe { self.device.free_memory(self.data.depth_image_memory, None) };
         unsafe { self.device.destroy_image_view(self.data.color_image_view, None) };
@@ -545,4 +539,5 @@ struct EngineData {
     window_height: u32,
     window_width: u32,
     resize_dimension: [u32 ;2],
+    allocator: Option<Allocator>,
 }
