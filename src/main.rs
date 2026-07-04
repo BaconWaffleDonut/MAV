@@ -3,16 +3,15 @@ use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use cgmath::{Deg, point3, vec3};
-use vk_mem::Allocator;
+use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, StartCause};
+use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{self, ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
+use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
 use log::*;
-use ash::{Device, Entry, Instance, khr::swapchain, vk::Handle, vk};
+use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
 
-const MAX_FRAMES_IN_FLIGHT: usize = 3;
 type Mat4 = cgmath::Matrix4<f32>;
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 800;
@@ -153,6 +152,8 @@ impl Engine {
         println!("Picked phyiscal device");
         let device = create_logical_device(&instance, &mut data).expect("MAIN: Failed to create Logical Device");
         println!("Created Device");
+        let allocator = unsafe { Allocator::new(AllocatorCreateInfo::new(&instance, &device, data.physical_device)).expect("Failed to create Allocator.") };
+        println!("Created and pushed Allocator");
         create_swapchain(&mut data, &instance, &device, [WIDTH, HEIGHT])/* .expect("MAIN: Failed to create Swapchain") */;
         println!("Created Swapchain");
         create_swapchain_image_views(&device, &mut data).expect("MAIN: Failed to create Swapchain Image Views.");
@@ -163,7 +164,7 @@ impl Engine {
         println!("Created Descriptor Set Layout");
         create_pipeline(&device, &mut data).expect("MAIN: Failed to create Graphics Pipeline.");
         println!("Created Pipeline");
-        create_command_pools(&instance, &device, &mut data, &entry, window).expect("MAIN: Failed to create Command Pools.");
+        create_command_pools(&instance, &device, &mut data).expect("MAIN: Failed to create Command Pools.");
         println!("Created Command Pools");
         create_color_objects(&instance, &device, &mut data).expect("MAIN: Failed to create Color Objects.");
         println!("Created Color Objects");
@@ -171,7 +172,7 @@ impl Engine {
         println!("Created Depth Objects");
         create_framebuffers(&device, &mut data).expect("MAIN: Failed to create Framebuffers.");
         println!("Created Framebuffers");
-        create_texture_image(&instance, &device, &mut data).expect("MAIN: Failed to create Texture Image.");
+        create_texture_image(&instance, &device, &mut data, &allocator).expect("MAIN: Failed to create Texture Image.");
         println!("Created Texture Image");
         create_texture_image_view(&device, &mut data).expect("MAIN: Failed to create Texture Image View.");
         println!("Created Texture Image View");
@@ -179,11 +180,11 @@ impl Engine {
         println!("Created Texture Sampler");
         load_model(&mut data).expect("MAIN: Failed to load Model.");
         println!("Loaded Model");
-        create_vertex_buffer(&instance, &device, &mut data).expect("MAIN: Failed to create Vertex Buffer.");
+        create_vertex_buffer(&instance, &device, &mut data, &allocator).expect("MAIN: Failed to create Vertex Buffer.");
         println!("Created Vertex Buffer");
-        create_index_buffer(&instance, &device, &mut data).expect("MAIN: Failed to create Index Buffer.");
+        create_index_buffer(&instance, &device, &mut data, &allocator).expect("MAIN: Failed to create Index Buffer.");
         println!("Created Index Buffer");
-        create_uniform_buffers(&instance, &device, &mut data).expect("MAIN: Failed to create Uniform Buffers.");
+        create_uniform_buffers(&instance, &device, &mut data, &allocator).expect("MAIN: Failed to create Uniform Buffers.");
         println!("Created Uniform Buffers");
         create_descriptor_pool(&device, &mut data).expect("MAIN: Failed to create Descriptor Pool.");
         println!("Created Descriptor Pool");
@@ -194,6 +195,7 @@ impl Engine {
         create_sync_objects(&device, &mut data).expect("MAIN: Failed to create Sync Objects.");
         println!("Created Sync Objects");
         // data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
+        data.allocator = Some(allocator);
         Ok(Self {
             entry,
             instance,
@@ -368,7 +370,7 @@ impl Engine {
         let ubo = UniformBufferObject { view, proj };
         
         let ubos = [ubo];
-        let buffer_mem = self.data.uniform_buffers_memory[image_index as usize];
+        let buffer_mem = self.data.allocator.as_mut().unwrap().get_allocation_info(&self.data.uniform_buffers_memory[image_index as usize]).device_memory;
         let size = size_of::<UniformBufferObject>() as vk::DeviceSize;
         let device = &self.device;
         let data_ptr = device.map_memory(buffer_mem, 0, size, vk::MemoryMapFlags::empty()).unwrap();
@@ -518,7 +520,7 @@ struct EngineData {
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
     uniform_buffers: Vec<vk::Buffer>,
-    uniform_buffers_memory: Vec<vk::DeviceMemory>,
+    uniform_buffers_memory: Vec<Allocation>,
 
     // Descriptors
     descriptor_pool: vk::DescriptorPool,
