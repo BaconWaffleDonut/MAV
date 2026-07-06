@@ -1,7 +1,9 @@
+use std::ptr::null;
 use std::{time::Instant, u64};
 use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
+use ash::vk::{Buffer, DeviceMemory, Handle};
 use cgmath::{Deg, point3, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
@@ -370,14 +372,13 @@ impl Engine {
         let ubo = UniformBufferObject { view, proj };
         
         let ubos = [ubo];
-        let buffer_mem = self.data.allocator.as_mut().unwrap().get_allocation_info(&self.data.uniform_buffers_memory[image_index as usize]).device_memory;
+        let buffer_mem = self.data.uniform_buffers_memory[image_index as usize];
         let size = size_of::<UniformBufferObject>() as vk::DeviceSize;
         let device = &self.device;
         let data_ptr = device.map_memory(buffer_mem, 0, size, vk::MemoryMapFlags::empty()).unwrap();
-        let mut align = ash::util::Align::new(data_ptr, align_of::<f32>() as _, size);
+        let mut align = unsafe { ash::util::Align::new(data_ptr, align_of::<f32>() as _, size) };
         align.copy_from_slice(&ubos);
-        device.unmap_memory(buffer_mem);
-
+        unsafe { device.unmap_memory(buffer_mem) };
 
         Ok(())
     }
@@ -394,9 +395,6 @@ impl Engine {
         create_color_objects(&self.instance, &self.device, &mut self.data)?;
         create_depth_objects(&self.instance, &self.device, &mut self.data)?;
         create_framebuffers(&self.device, &mut self.data)?;
-        // create_uniform_buffers(&self.instance, &self.device, &mut self.data)?;
-        // create_descriptor_pool(&self.device, &mut self.data)?;
-        // create_descriptor_sets(&self.device, &mut self.data)?;
         self.data.images_in_flight.resize(self.data.swapchain_images.len(), vk::Fence::null());
         Ok(false)
 
@@ -406,16 +404,20 @@ impl Engine {
     unsafe fn destroy(&mut self) {
         unsafe { self.device.device_wait_idle().unwrap() };
         
-        self.destroy_swapchain();
+        unsafe { self.destroy_swapchain() };
+
+        let allocator = self.data.allocator.as_mut().unwrap();
 
         self.data.in_flight_fences.iter().for_each(|f| unsafe { self.device.destroy_fence(*f, None) });
         self.data.render_finished_semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
         self.data.image_available_semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
         self.data.command_pools.iter().for_each(|p| unsafe { self.device.destroy_command_pool(*p, None) });
-        unsafe { self.device.free_memory(self.data.index_buffer_memory, None) };
-        unsafe { self.device.destroy_buffer(self.data.index_buffer, None) };
-        unsafe { self.device.free_memory(self.data.vertex_buffer_memory, None) };
-        unsafe { self.device.destroy_buffer(self.data.vertex_buffer, None) };
+        // unsafe { self.device.free_memory(self.data.index_buffer_memory, None) };
+        // unsafe { self.device.destroy_buffer(self.data.index_buffer, None) };
+        // unsafe { self.device.free_memory(self.data.vertex_buffer_memory, None) };
+        // unsafe { self.device.destroy_buffer(self.data.vertex_buffer, None) };
+        unsafe { allocator.destroy_buffer(self.data.index_buffer, self.data.index_allocation.as_mut().unwrap()) };
+        unsafe { allocator.destroy_buffer(self.data.vertex_buffer, self.data.vertex_allocation.as_mut().unwrap()) };
         unsafe { self.device.destroy_sampler(self.data.texture_sampler, None) };
         unsafe { self.device.destroy_image_view(self.data.texture_image_view, None) };
         unsafe { self.device.free_memory(self.data.texture_image_memory, None) };
@@ -436,9 +438,6 @@ impl Engine {
 
     // Destroy Swapchain
     unsafe fn destroy_swapchain(&mut self) {
-        // unsafe { self.device.destroy_descriptor_pool(self.data.descriptor_pool, None) };
-        // self.data.uniform_buffers_memory.iter().for_each(|m| unsafe { self.device.free_memory(*m, None) });
-        // self.data.uniform_buffers.iter().for_each(|b| unsafe { self.device.destroy_buffer(*b, None) });
         unsafe { self.device.destroy_image_view(self.data.depth_image_view, None) };
         unsafe { self.device.free_memory(self.data.depth_image_memory, None) };
         unsafe { self.device.destroy_image_view(self.data.color_image_view, None) };
@@ -515,12 +514,15 @@ struct EngineData {
     indices: Vec<u32>,
 
     // Buffers
+    vertex_allocation: Option<Allocation>,
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
+    index_allocation: Option<Allocation>,
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
+    uniform_allocations: Vec<Allocation>,
     uniform_buffers: Vec<vk::Buffer>,
-    uniform_buffers_memory: Vec<Allocation>,
+    uniform_buffers_memory: Vec<DeviceMemory>,
 
     // Descriptors
     descriptor_pool: vk::DescriptorPool,

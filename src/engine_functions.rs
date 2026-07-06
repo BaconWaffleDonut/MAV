@@ -1283,6 +1283,7 @@ pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut Eng
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
         vk_mem::AllocationCreateFlags::empty(),
         allocator)?;
+    data.vertex_allocation = Some(vertex_buffer_memory);
     let vertex_buffer_memory = allocator.get_allocation_info(&vertex_buffer_memory).device_memory;
     data.vertex_buffer = vertex_buffer;
     data.vertex_buffer_memory = vertex_buffer_memory;
@@ -1292,8 +1293,6 @@ pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut Eng
     
     // Cleanup
     unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
-    // unsafe { device.destroy_buffer(staging_buffer, None) };
-    // unsafe { device.free_memory(staging_buffer_memory, None) };
     
     Ok(())
 }
@@ -1323,6 +1322,7 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
         vk_mem::AllocationCreateFlags::empty(),
         allocator)?;
+    data.index_allocation = Some(index_buffer_memory);
     let index_buffer_memory = allocator.get_allocation_info(&index_buffer_memory).device_memory;
     data.index_buffer = index_buffer;
     data.index_buffer_memory = index_buffer_memory;
@@ -1332,8 +1332,6 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
 
     // Cleanup
     unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
-    // unsafe { device.destroy_buffer(staging_buffer, None) };
-    // unsafe { device.free_memory(staging_buffer_memory, None) };
 
     Ok(())
 }
@@ -1352,7 +1350,8 @@ pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut E
             vk_mem::AllocationCreateFlags::empty(),
             allocator)?;
         data.uniform_buffers.push(uniform_buffer);
-        // let uniform_buffer_memory = allocator.get_allocation_info(&uniform_buffer_memory).device_memory;
+        data.uniform_allocations.push(uniform_buffer_memory);
+        let uniform_buffer_memory = allocator.get_allocation_info(&uniform_buffer_memory).device_memory;
         data.uniform_buffers_memory.push(uniform_buffer_memory);
     }
     Ok(())
