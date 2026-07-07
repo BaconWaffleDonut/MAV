@@ -1,5 +1,5 @@
 #![allow(dead_code, unsafe_op_in_unsafe_fn)]
-use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor}};
+use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor, empty}, ptr::null};
 use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
 use ash::{
@@ -998,7 +998,8 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
-        allocator).expect("Failed to create staging buffers for Texture Image!");
+        allocator,
+        0).expect("Failed to create staging buffers for Texture Image!");
 
     // Copy Staging
     let memory = unsafe { allocator.map_memory(&mut staging_buffer_allocation).expect("Failed to map Texture Image Memory.") };
@@ -1262,7 +1263,8 @@ pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut Eng
     vk::BufferUsageFlags::TRANSFER_SRC,
     vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
     vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
-    allocator)?;
+    allocator,
+    0)?;
     // Copy Staging
     let memory = unsafe { allocator.map_memory(&mut staging_buffer_memory) }?;
     unsafe { memcpy(data.vertices.as_ptr(), memory.cast(), data.vertices.len()) };
@@ -1276,7 +1278,8 @@ pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut Eng
         vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
         vk_mem::AllocationCreateFlags::empty(),
-        allocator)?;
+        allocator,
+        0)?;
     data.vertex_allocation = Some(vertex_buffer_memory);
     let vertex_buffer_memory = allocator.get_allocation_info(&vertex_buffer_memory).device_memory;
     data.vertex_buffer = vertex_buffer;
@@ -1301,7 +1304,8 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
         vk::BufferUsageFlags::TRANSFER_SRC, 
         vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
         vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
-        allocator)?;
+        allocator,
+        0)?;
     
     // Copy Staging
     let memory = unsafe { allocator.map_memory(&mut staging_buffer_memory) }?;
@@ -1315,7 +1319,8 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
         vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
         vk_mem::AllocationCreateFlags::empty(),
-        allocator)?;
+        allocator,
+        0)?;
     data.index_allocation = Some(index_buffer_memory);
     let index_buffer_memory = allocator.get_allocation_info(&index_buffer_memory).device_memory;
     data.index_buffer = index_buffer;
@@ -1333,19 +1338,21 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
 pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut EngineData, allocator: &Allocator) -> Result<()> {
     data.uniform_buffers.clear();
     data.uniform_buffers_memory.clear();
-    // let allocator = data.allocator.as_mut().unwrap();
 
-    for _ in 0..data.swapchain_images.len() {
+    for n in 0..data.swapchain_images.len() {
+        let count = n;
         let (uniform_buffer, uniform_buffer_memory) = create_buffer(
             data,
             size_of::<UniformBufferObject>() as vk::DeviceSize, 
             vk::BufferUsageFlags::UNIFORM_BUFFER, 
             vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-            vk_mem::AllocationCreateFlags::empty(),
-            allocator)?;
+            vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+            allocator,
+            count)?;
         data.uniform_buffers.push(uniform_buffer);
         data.uniform_allocations.push(uniform_buffer_memory);
         let uniform_buffer_memory = allocator.get_allocation_info(&uniform_buffer_memory).device_memory;
+        println!("{:?}", uniform_buffer_memory);
         data.uniform_buffers_memory.push(uniform_buffer_memory);
     }
     Ok(())
@@ -1466,7 +1473,7 @@ pub fn create_sync_objects(device: &Device, data: &mut EngineData) -> Result<()>
 // Shared Buffers
 //====================
 
-pub fn create_buffer(data: &mut EngineData, size: vk::DeviceSize, usage: vk::BufferUsageFlags, preferred_flags: vk::MemoryPropertyFlags, flags: vk_mem::AllocationCreateFlags, allocator: &Allocator ) -> Result<(vk::Buffer, Allocation)> {
+pub fn create_buffer(data: &mut EngineData, size: vk::DeviceSize, usage: vk::BufferUsageFlags, preferred_flags: vk::MemoryPropertyFlags, flags: vk_mem::AllocationCreateFlags, allocator: &Allocator, user_data:usize ) -> Result<(vk::Buffer, Allocation)> {
     // Create Buffer Info 
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
@@ -1476,6 +1483,7 @@ pub fn create_buffer(data: &mut EngineData, size: vk::DeviceSize, usage: vk::Buf
         usage: vk_mem::MemoryUsage::Auto,
         preferred_flags,
         flags,
+        user_data,
         ..Default::default()
     };
 

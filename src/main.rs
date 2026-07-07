@@ -379,10 +379,13 @@ impl Engine {
         let buffer_mem = self.data.uniform_buffers_memory[image_index as usize];
         let size = size_of::<UniformBufferObject>() as vk::DeviceSize;
         let device = &self.device;
-        let data_ptr = device.map_memory(buffer_mem, 0, size, vk::MemoryMapFlags::empty()).unwrap();
+        // let data_ptr = device.map_memory(buffer_mem, 0, size, vk::MemoryMapFlags::empty()).unwrap();
+        self.data.allocator.as_mut().unwrap().map_memory(&mut self.data.uniform_allocations[image_index as usize])?;
+        let data_ptr = self.data.allocator.as_ref().unwrap().get_allocation_info(&self.data.uniform_allocations[image_index as usize]).mapped_data;
         let mut align = unsafe { ash::util::Align::new(data_ptr, align_of::<f32>() as _, size) };
         align.copy_from_slice(&ubos);
-        unsafe { device.unmap_memory(buffer_mem) };
+        // unsafe { device.unmap_memory(buffer_mem) };
+        self.data.allocator.as_mut().unwrap().unmap_memory(&mut self.data.uniform_allocations[image_index as usize]);
 
         Ok(())
     }
@@ -422,14 +425,42 @@ impl Engine {
         // unsafe { self.device.destroy_buffer(self.data.vertex_buffer, None) };
         unsafe { allocator.destroy_buffer(self.data.index_buffer, self.data.index_allocation.as_mut().unwrap()) };
         unsafe { allocator.destroy_buffer(self.data.vertex_buffer, self.data.vertex_allocation.as_mut().unwrap()) };
+        let ubo_count= self.data.uniform_buffers.len() ;
+        for n in 0..ubo_count {
+            let allocation = &mut self.data.uniform_allocations;
+            unsafe { allocator.destroy_buffer(self.data.uniform_buffers[n as usize], &mut allocation[n as usize]) };
+        }
         unsafe { self.device.destroy_sampler(self.data.texture_sampler, None) };
         unsafe { self.device.destroy_image_view(self.data.texture_image_view, None) };
         unsafe { self.device.free_memory(self.data.texture_image_memory, None) };
         unsafe { self.device.destroy_image(self.data.texture_image, None) };
         unsafe { self.device.destroy_command_pool(self.data.command_pool, None) };
+        self.device.destroy_descriptor_pool(self.data.descriptor_pool, None);
         unsafe { self.device.destroy_descriptor_set_layout(self.data.descriptor_set_layout, None) };
         unsafe { self.device.destroy_device(None) };
         unsafe { self.data.surface_loader.as_ref().unwrap().destroy_surface(self.data.surface, None) };
+        // println!("
+        // Index Buffer: {:?}
+        // Vertex Buffer: {:?}
+        // Command Buffers: {:?}
+        // Uniform Buffers: {:?}
+        // Secondary Command Buffers: {:?}
+        // Color Image: {:?}
+        // Depth Image: {:?}
+        // Texture Image: {:?}
+        // Swapchain Images: {:?}
+        // Descriptor Sets: {:?}
+        // Descriptor Pool: {:?}
+        // Color Image Memory: {:?}
+        // Depth Image Memory: {:?}
+        // Index Buffer Memory: {:?}
+        // Texture Image Memory: {:?}
+        // Vertex Buffer Memory: {:?}
+        // Uniform Buffers Memory: {:?}
+        // Color Image View: {:?}
+        // Depth Image View: {:?}
+        // Texture Image View: {:?}
+        // Swapchain Image Views: {:?}", self.data.index_buffer, self.data.vertex_buffer, self.data.command_buffers, self.data.uniform_buffers, self.data.secondary_command_buffers, self.data.color_image, self.data.depth_image, self.data.texture_image, self.data.swapchain_images, self.data.descriptor_sets, self.data.descriptor_pool, self.data.color_image_memory, self.data.depth_image_memory, self.data.index_buffer_memory, self.data.texture_image_memory, self.data.vertex_buffer_memory, self.data.uniform_buffers_memory, self.data.color_image_view, self.data.depth_image_view, self.data.texture_image_view, self.data.swapchain_image_views);
         
         if VALIDATION_ENABLED {
             self.data.debug_utils_loader.as_mut().unwrap().destroy_debug_utils_messenger(self.data.debug_call_back, None);
