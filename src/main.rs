@@ -8,6 +8,7 @@ use cgmath::{Deg, point3, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
 use winit::event::ElementState;
+use winit::event_loop::ControlFlow::Poll;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
 use log::*;
@@ -47,15 +48,22 @@ struct App {
 impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, _: WindowId, event: WindowEvent) {
         info!("{event:?}");
+        event_loop.set_control_flow(Poll);
         match event {
             WindowEvent::CloseRequested => {
                 info!("Close was requested; stopping");
                 event_loop.exit();
+                unsafe { self.app.as_mut().unwrap().destroy() };
             },
-            WindowEvent::SurfaceResized(_) => {
-                self.window.as_ref().expect("Resize without a window").request_redraw();
+            WindowEvent::SurfaceResized(size) => {
+                if size.width == 0 || size.height == 0 {
+                    self.app.as_mut().unwrap().minimized = true;
+                } else {
+                    self.app.as_mut().unwrap().minimized = false;
+                    self.window.as_ref().expect("Resize without a window").request_redraw();
+                }
             },
-            WindowEvent::RedrawRequested => {
+            WindowEvent::RedrawRequested if !event_loop.exiting() && !self.app.as_ref().unwrap().minimized => {
                 // Redraw the application here
                 let window = self.window.as_ref().expect("Redraw requested without a window");
 
@@ -65,7 +73,7 @@ impl ApplicationHandler for App {
                 //Draw, using temporary full color window for testing
                 unsafe{self.app.as_mut().unwrap().render().expect("Failed to render...")};
                 //Can use window.request_redraw(); for continous loop
-                window.request_redraw();
+                // window.request_redraw();
             },
             WindowEvent::KeyboardInput { event, .. } => {
                 println!("Key Pressed: {:?}", self.app.as_ref().unwrap().models);
@@ -130,6 +138,7 @@ struct Engine {
     start: Instant,
     models: usize,
     resize_dimensions: [u32; 2],
+    minimized: bool,
 }
 
 impl Engine {
@@ -144,12 +153,7 @@ impl Engine {
         println!("Created Entry");
         let instance = create_instance(&mut data, event_loop).expect("MAIN: Failed to create Instace.");
         println!("Created Instace");
-        data.surface = unsafe{ash_window::create_surface(
-            &entry, 
-            &instance, 
-            event_loop.display_handle()?.as_raw(), 
-            window.window_handle()?.as_raw(), 
-            None)}.expect("Failed to create surface.");
+        data.surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
         pick_physical_device(&instance, &entry, &mut data).expect("MAIN: Failed to pick Physical Device");
         println!("Picked phyiscal device");
         let device = create_logical_device(&instance, &mut data).expect("MAIN: Failed to create Logical Device");
@@ -196,7 +200,6 @@ impl Engine {
         println!("Created Command Buffers");
         create_sync_objects(&device, &mut data).expect("MAIN: Failed to create Sync Objects.");
         println!("Created Sync Objects");
-        // data.images_in_flight = data.swapchain_images.iter().map(|_| vk::Fence::null()).collect();
         data.allocator = Some(allocator);
         Ok(Self {
             entry,
@@ -208,6 +211,7 @@ impl Engine {
             start: Instant::now(),
             models: 1,
             resize_dimensions: [WIDTH, HEIGHT],
+            minimized: false,
         })
     }
     
@@ -426,9 +430,9 @@ impl Engine {
         unsafe { self.device.destroy_descriptor_set_layout(self.data.descriptor_set_layout, None) };
         unsafe { self.device.destroy_device(None) };
         unsafe { self.data.surface_loader.as_ref().unwrap().destroy_surface(self.data.surface, None) };
-
+        
         if VALIDATION_ENABLED {
-            // unsafe { self.destroy_debug_utils_messenger(self.data.debug_call_back, None) };
+            self.data.debug_utils_loader.as_mut().unwrap().destroy_debug_utils_messenger(self.data.debug_call_back, None);
         }
         
         unsafe { self.instance.destroy_instance(None) };
@@ -440,6 +444,7 @@ impl Engine {
     unsafe fn destroy_swapchain(&mut self) {
         unsafe { self.device.destroy_image_view(self.data.depth_image_view, None) };
         unsafe { self.device.free_memory(self.data.depth_image_memory, None) };
+        self.device.destroy_image(self.data.depth_image, None);
         unsafe { self.device.destroy_image_view(self.data.color_image_view, None) };
         unsafe { self.device.free_memory(self.data.color_image_memory, None) };
         unsafe { self.device.destroy_image(self.data.color_image, None) };
@@ -458,7 +463,7 @@ impl Engine {
 struct EngineData {
     // Debug
     debug_call_back: vk::DebugUtilsMessengerEXT,
-    // debug_utils_loader: ash::ext::debug_utils::Instance,
+    debug_utils_loader: Option<ash::ext::debug_utils::Instance>,
 
     // Surface
     surface: vk::SurfaceKHR,
@@ -542,6 +547,5 @@ struct EngineData {
     // MISC
     window_height: u32,
     window_width: u32,
-    resize_dimension: [u32 ;2],
     allocator: Option<Allocator>,
 }

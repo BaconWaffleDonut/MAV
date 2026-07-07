@@ -194,6 +194,7 @@ pub fn create_instance(data: &mut EngineData, event_loop: &dyn ActiveEventLoop) 
     data.debug_call_back = unsafe{debug_utils_loader
         .create_debug_utils_messenger(&debug_info, None)
         .unwrap()};
+    data.debug_utils_loader = Some(debug_utils_loader);
 
     Ok(instance)
 }
@@ -458,13 +459,6 @@ pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Dev
     let capabilities = unsafe {surface.get_physical_device_surface_capabilities(physical_device, surface_khr).unwrap()};
     let formats = unsafe {surface.get_physical_device_surface_formats(physical_device, surface_khr).unwrap()};
     let present_modes = unsafe {surface.get_physical_device_surface_present_modes(physical_device, surface_khr).unwrap()};
-
-    // Clear Sync Objects
-
-    // data.in_flight_fences.iter().for_each(|f| unsafe { device.destroy_fence(*f, None) });
-    // data.render_finished_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
-    // data.image_available_semaphores.iter().for_each(|s| unsafe { device.destroy_semaphore(*s, None) });
-    // println!("SWAPCHAIN: Cleared Sync Objects");
     
     // Choose Swapchain Surface Format
     let format = get_swapchain_surface_format(&formats);
@@ -898,14 +892,14 @@ pub fn create_color_objects(instance: &Instance, device: &Device, data: &mut Eng
     data.color_image = color_image;
     data.color_image_memory = color_image_memory;
 
-    // transition_image_layout(
-    //     device, 
-    //     data, 
-    //     data.color_image, 
-    //     format, 
-    //     vk::ImageLayout::UNDEFINED, 
-    //     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, 
-    //     1).expect("Failed to transition image layout.");
+    transition_image_layout(
+        device, 
+        data, 
+        data.color_image, 
+        format, 
+        vk::ImageLayout::UNDEFINED, 
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, 
+        1).expect("Failed to transition image layout.");
 
     // Image View
     data.color_image_view = create_image_view(
