@@ -987,9 +987,9 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
     let (width, height) = reader.info().size();
     data.mip_levels = (width.max(height) as f32).log2().floor() as u32 + 1;
 
-    if width != 1024 || height != 1024 || reader.info().color_type != png::ColorType::Rgba {
-        panic!("Invalid texture image used.")
-    }
+    // if width != 1024 || height != 1024 || reader.info().color_type != png::ColorType::Rgba {
+        // panic!("Invalid texture image used.")
+    // }
 
     // Create Staging
     let (staging_buffer, mut staging_buffer_allocation) = create_buffer(

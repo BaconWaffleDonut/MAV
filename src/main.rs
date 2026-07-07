@@ -41,7 +41,7 @@ fn main() -> Result<()> {
 #[derive(Default)]
 struct App {
     window: Option<Box<dyn Window>>,
-    vulkan: Option<Box<EngineData>>,
+    vulkan: Option<EngineData>,
     app: Option<Engine>
 }
 
@@ -72,15 +72,16 @@ impl ApplicationHandler for App {
 
                 //Draw, using temporary full color window for testing
                 unsafe{self.app.as_mut().unwrap().render().expect("Failed to render...")};
-                //Can use window.request_redraw(); for continous loop
-                // window.request_redraw();
+
             },
             WindowEvent::KeyboardInput { event, .. } => {
-                println!("Key Pressed: {:?}", self.app.as_ref().unwrap().models);
+                println!("Key Pressed: {:?}", self.app.as_ref().unwrap().opacity_config);
                 if event.state == ElementState::Pressed {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::ArrowLeft) if self.app.as_mut().unwrap().models > 1 => self.app.as_mut().unwrap().models -= 1,
                         PhysicalKey::Code(KeyCode::ArrowRight) if self.app.as_mut().unwrap().models < 4 => self.app.as_mut().unwrap().models += 1,
+                        PhysicalKey::Code(KeyCode::ArrowDown) if self.app.as_mut().unwrap().opacity_config > 0.01 => self.app.as_mut().unwrap().opacity_config -= 0.01,
+                        PhysicalKey::Code(KeyCode::ArrowUp) if self.app.as_mut().unwrap().opacity_config < 0.25 => self.app.as_mut().unwrap().opacity_config += 0.01,
                         _ => {}
                     }
                 }
@@ -139,6 +140,7 @@ struct Engine {
     models: usize,
     resize_dimensions: [u32; 2],
     minimized: bool,
+    opacity_config: f32,
 }
 
 impl Engine {
@@ -212,6 +214,7 @@ impl Engine {
             models: 1,
             resize_dimensions: [WIDTH, HEIGHT],
             minimized: false,
+            opacity_config: 0.1,
         })
     }
     
@@ -333,7 +336,7 @@ impl Engine {
         let time = self.start.elapsed().as_secs_f32();
         let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0) * time);
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
-        let opacity = (model_index + 1) as f32 * 0.25;
+        let opacity = (model_index + 1) as f32 * self.opacity_config;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
 
         // Commands
@@ -419,10 +422,6 @@ impl Engine {
         self.data.render_finished_semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
         self.data.image_available_semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
         self.data.command_pools.iter().for_each(|p| unsafe { self.device.destroy_command_pool(*p, None) });
-        // unsafe { self.device.free_memory(self.data.index_buffer_memory, None) };
-        // unsafe { self.device.destroy_buffer(self.data.index_buffer, None) };
-        // unsafe { self.device.free_memory(self.data.vertex_buffer_memory, None) };
-        // unsafe { self.device.destroy_buffer(self.data.vertex_buffer, None) };
         unsafe { allocator.destroy_buffer(self.data.index_buffer, self.data.index_allocation.as_mut().unwrap()) };
         unsafe { allocator.destroy_buffer(self.data.vertex_buffer, self.data.vertex_allocation.as_mut().unwrap()) };
         let ubo_count= self.data.uniform_buffers.len() ;
@@ -439,28 +438,6 @@ impl Engine {
         unsafe { self.device.destroy_descriptor_set_layout(self.data.descriptor_set_layout, None) };
         unsafe { self.device.destroy_device(None) };
         unsafe { self.data.surface_loader.as_ref().unwrap().destroy_surface(self.data.surface, None) };
-        // println!("
-        // Index Buffer: {:?}
-        // Vertex Buffer: {:?}
-        // Command Buffers: {:?}
-        // Uniform Buffers: {:?}
-        // Secondary Command Buffers: {:?}
-        // Color Image: {:?}
-        // Depth Image: {:?}
-        // Texture Image: {:?}
-        // Swapchain Images: {:?}
-        // Descriptor Sets: {:?}
-        // Descriptor Pool: {:?}
-        // Color Image Memory: {:?}
-        // Depth Image Memory: {:?}
-        // Index Buffer Memory: {:?}
-        // Texture Image Memory: {:?}
-        // Vertex Buffer Memory: {:?}
-        // Uniform Buffers Memory: {:?}
-        // Color Image View: {:?}
-        // Depth Image View: {:?}
-        // Texture Image View: {:?}
-        // Swapchain Image Views: {:?}", self.data.index_buffer, self.data.vertex_buffer, self.data.command_buffers, self.data.uniform_buffers, self.data.secondary_command_buffers, self.data.color_image, self.data.depth_image, self.data.texture_image, self.data.swapchain_images, self.data.descriptor_sets, self.data.descriptor_pool, self.data.color_image_memory, self.data.depth_image_memory, self.data.index_buffer_memory, self.data.texture_image_memory, self.data.vertex_buffer_memory, self.data.uniform_buffers_memory, self.data.color_image_view, self.data.depth_image_view, self.data.texture_image_view, self.data.swapchain_image_views);
         
         if VALIDATION_ENABLED {
             self.data.debug_utils_loader.as_mut().unwrap().destroy_debug_utils_messenger(self.data.debug_call_back, None);
