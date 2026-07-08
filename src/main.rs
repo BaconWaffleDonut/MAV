@@ -6,13 +6,14 @@ use ash::vk::DeviceMemory;
 use cgmath::{Deg, point3, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
-use winit::event::ElementState;
+use winit::event::{ButtonSource, ElementState, MouseButton};
 use winit::event_loop::ControlFlow::Poll;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
 use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
+use crate::util::camera::*;
 mod util;
 
 type Mat4 = cgmath::Matrix4<f32>;
@@ -55,6 +56,7 @@ impl ApplicationHandler for App {
                 event_loop.exit();
                 unsafe { self.app.as_mut().unwrap().destroy() };
             },
+
             WindowEvent::SurfaceResized(size) => {
                 if size.width == 0 || size.height == 0 {
                     self.app.as_mut().unwrap().minimized = true;
@@ -63,6 +65,7 @@ impl ApplicationHandler for App {
                     self.window.as_ref().expect("Resize without a window").request_redraw();
                 }
             },
+
             WindowEvent::RedrawRequested if !event_loop.exiting() && !self.app.as_ref().unwrap().minimized => {
                 // Redraw the application here
                 let window = self.window.as_ref().expect("Redraw requested without a window");
@@ -74,23 +77,50 @@ impl ApplicationHandler for App {
                 unsafe{self.app.as_mut().unwrap().render().expect("Failed to render...")};
 
             },
+
             WindowEvent::KeyboardInput { event, .. } => {
-                println!("Key Pressed: {:?}", self.app.as_ref().unwrap().opacity_config);
                 if event.state == ElementState::Pressed {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::ArrowLeft) if self.app.as_mut().unwrap().models > 1 => self.app.as_mut().unwrap().models -= 1,
                         PhysicalKey::Code(KeyCode::ArrowRight) if self.app.as_mut().unwrap().models < 4 => self.app.as_mut().unwrap().models += 1,
-                        PhysicalKey::Code(KeyCode::ArrowDown) if self.app.as_mut().unwrap().opacity_config > 0.01 => self.app.as_mut().unwrap().opacity_config -= 0.01,
-                        PhysicalKey::Code(KeyCode::ArrowUp) if self.app.as_mut().unwrap().opacity_config < 0.25 => self.app.as_mut().unwrap().opacity_config += 0.01,
                         _ => {}
                     }
                 }
+            },
+
+            WindowEvent::PointerMoved {position, .. } => {
+                let app = self.app.as_mut().unwrap();
+
+                let position: (i32, i32) = position.into();
+                app.cursor_delta = Some([
+                    app.cursor_pos[0] - position.0,
+                    app.cursor_pos[1] - position.1,
+                ]);
+                app.cursor_pos = [position.0, position.1];
+            }
+
+            WindowEvent::PointerButton {state, button, .. } => {
+                self.app.as_mut().unwrap().left_clicked = state == ElementState::Pressed && button == ButtonSource::Mouse(MouseButton::Left);
+                println!("Is left clicked: {}", self.app.as_ref().unwrap().left_clicked);
+            }
+
+            WindowEvent::MouseWheel {
+                delta: winit::event::MouseScrollDelta::LineDelta(_, v_lines),
+                .. 
+            } => {
+                self.app.as_mut().unwrap().wheel_delta = Some(v_lines);
             },
 
             _ => (),
         }
     }
     
+    fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
+        if let Some(app) = self.app.as_mut() {
+            app.wheel_delta = None;
+        }
+    }
+
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let window_attributes = WindowAttributes::default().with_title("M.A.V").with_surface_size(PhysicalSize::new(WIDTH, HEIGHT));
         let window = match event_loop.create_window(window_attributes) {
@@ -140,7 +170,11 @@ struct Engine {
     models: usize,
     resize_dimensions: [u32; 2],
     minimized: bool,
-    opacity_config: f32,
+    camera: Camera,
+    wheel_delta: Option<f32>,
+    cursor_delta: Option<[i32; 2]>,
+    cursor_pos: [i32; 2],
+    left_clicked: bool,
 }
 
 impl Engine {
@@ -214,7 +248,11 @@ impl Engine {
             models: 1,
             resize_dimensions: [WIDTH, HEIGHT],
             minimized: false,
-            opacity_config: 0.1,
+            camera: Default::default(),
+            wheel_delta: None,
+            cursor_delta: None,
+            cursor_pos: [0, 0],
+            left_clicked: false,
         })
     }
     
@@ -334,7 +372,7 @@ impl Engine {
         let z = (((model_index / 2) as f32) * -2.0) + 1.0;
 
         let time = self.start.elapsed().as_secs_f32();
-        let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0) * time);
+        let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0) );
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
         let opacity = /* (model_index + 1) as f32 * self.opacity_config */ 1.0 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
@@ -364,10 +402,26 @@ impl Engine {
 
     // Update Uniform Buffer Object
     unsafe fn update_uniform_buffer(&mut self, image_index: u32) -> Result<()> {
-        let aspect =self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
+        // Camera
+        if self.left_clicked && self.cursor_delta.is_some() {
+            println!("Trying to rotate");
+            let delta = self.cursor_delta.take().unwrap();
+            let x_ratio = delta[0] as f32 / self.data.swapchain_extent.width as f32;
+            let y_ratio = delta[1] as f32 / self.data.swapchain_extent.height as f32;
+            let theta = x_ratio * 180.0_f32.to_radians();
+            let phi = y_ratio * 90.0_f32.to_radians();
+            self.camera.rotate(theta, phi);
+        }
+
+        if let Some(wheel_delta) = self.wheel_delta {
+            self.camera.foward(wheel_delta * 0.01);
+        }
+        
         // MVP
+        let aspect =self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
         let view = Mat4::look_at_rh(
-            point3::<f32>(6.0, 0.0, 0.0), 
+            // point3::<f32>(6.0, 0.0, 2.0), 
+            self.camera.position(),
             point3::<f32>(0.0, 0.0, 0.0), 
             vec3(0.0, 0.0, 1.0));
         let correction = Mat4::new(
