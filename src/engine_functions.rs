@@ -1,5 +1,5 @@
 #![allow(dead_code, unsafe_op_in_unsafe_fn)]
-use std::{borrow::Cow, ffi::{self, CStr}, fs::File, hash::{Hash, Hasher}, io::{BufReader, Cursor, empty}, ptr::null};
+use std::{borrow::Cow, ffi::{self, CStr}, hash::{Hash, Hasher}, io::Cursor};
 use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
 use ash::{
@@ -12,6 +12,7 @@ use anyhow::{Ok, Result, anyhow};
 use thiserror::Error;
 use std::ptr::copy_nonoverlapping as memcpy;
 use crate::EngineData;
+use crate::util::*;
 
 const APP_NAME: &CStr = c"Testing";
 const ENGINE_NAME: &CStr = c"M.A.V.";
@@ -237,6 +238,7 @@ pub fn pick_physical_device(instance: &Instance, entry: &Entry, data: &mut Engin
     // Import surface and surface loader to get requirements. 
     let surface_loader = surface::Instance::new(&entry, &instance);
     let surface = data.surface;
+
     // Select and check physical device.
     let physical_devices = unsafe { instance.enumerate_physical_devices().expect("Physical Device Error") };
     let (physical_device, queue_family_index) = physical_devices
@@ -792,11 +794,6 @@ pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {
 
     data.pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
 
-    // Dynamic State 
-    // let dynamic_state = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    // let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_state);
-    // TODO! Eventually figure out what a dynamic state is and see if implementing it is beneficial.
-
     // Create
 
     let stages = &[vert_stage, frag_stage];
@@ -809,7 +806,6 @@ pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {
         .multisample_state(&multisample_state)
         .depth_stencil_state(&depth_stencil_state)
         .color_blend_state(&color_blend_state)
-        // .dynamic_state(&dynamic_state_info)
         .layout(data.pipeline_layout)
         .render_pass(data.render_pass)
         .subpass(0);
@@ -975,21 +971,14 @@ pub fn get_supported_format(instance: &Instance, data: &EngineData, candidates: 
 //====================
 
 pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut EngineData, allocator: &Allocator) -> Result<()> {
-    // Load 
-    let image = File::open("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/resources/pic.png").expect("Failed to open PNG.");
-    let decoder = png::Decoder::new(BufReader::new(image));
-    let mut reader = decoder.read_info()?;
-    
-    let mut pixels = vec![0; reader.info().raw_bytes()];
-    reader.next_frame(&mut pixels)?;
-    
-    let size = reader.info().raw_bytes() as u64;
-    let (width, height) = reader.info().size();
-    data.mip_levels = (width.max(height) as f32).log2().floor() as u32 + 1;
-
-    // if width != 1024 || height != 1024 || reader.info().color_type != png::ColorType::Rgba {
-        // panic!("Invalid texture image used.")
-    // }
+    // Load
+    let cursor = fs::load("pic.png");
+    let image = image::load(cursor, image::ImageFormat::Png).expect("Failed to load image.");
+    let image_as_rgb = image.to_rgba8();
+    let (width, height) = image_as_rgb.dimensions();
+    data.mip_levels = ( (width.max(height) as f32).log2().floor() + 1.0) as u32;
+    let pixels = image_as_rgb.into_raw();
+    let size = (pixels.len() * size_of::<u8>()) as vk::DeviceSize;
 
     // Create Staging
     let (staging_buffer, mut staging_buffer_allocation) = create_buffer(
@@ -1003,7 +992,6 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
 
     // Copy Staging
     let memory = unsafe { allocator.map_memory(&mut staging_buffer_allocation).expect("Failed to map Texture Image Memory.") };
-    // let memory = unsafe { device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty()) }?;
     unsafe { memcpy(pixels.as_ptr(), memory.cast(), pixels.len()) };
     unsafe { allocator.unmap_memory(&mut staging_buffer_allocation) };
 
@@ -1036,8 +1024,6 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
 
     // Cleanup
     unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_allocation) };
-    // unsafe { device.destroy_buffer(staging_buffer, None) };
-    // unsafe { device.free_memory(staging_buffer_memory, None) };
 
     // Mipmaps
     generate_mipmaps(
@@ -1382,7 +1368,6 @@ pub fn create_descriptor_pool(device: &Device, data: &mut EngineData) -> Result<
 
 pub fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> Result<()> {
     // Allocate
-    // let layouts = vec![data.descriptor_set_layout; data.swapchain_images.len()];
     let layouts = (0..data.uniform_buffers.len()).map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(data.descriptor_pool)

@@ -1,9 +1,8 @@
-use std::ptr::null;
 use std::{time::Instant, u64};
 use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
-use ash::vk::{Buffer, DeviceMemory, Handle};
+use ash::vk::DeviceMemory;
 use cgmath::{Deg, point3, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
@@ -14,6 +13,7 @@ use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{Ac
 use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
+mod util;
 
 type Mat4 = cgmath::Matrix4<f32>;
 const WIDTH: u32 = 800;
@@ -336,7 +336,7 @@ impl Engine {
         let time = self.start.elapsed().as_secs_f32();
         let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0) * time);
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
-        let opacity = (model_index + 1) as f32 * self.opacity_config;
+        let opacity = /* (model_index + 1) as f32 * self.opacity_config */ 1.0 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
 
         // Commands
@@ -367,7 +367,7 @@ impl Engine {
         let aspect =self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
         // MVP
         let view = Mat4::look_at_rh(
-            point3::<f32>(6.0, 0.0, 2.0), 
+            point3::<f32>(6.0, 0.0, 0.0), 
             point3::<f32>(0.0, 0.0, 0.0), 
             vec3(0.0, 0.0, 1.0));
         let correction = Mat4::new(
