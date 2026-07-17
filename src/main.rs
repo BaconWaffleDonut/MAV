@@ -1,9 +1,10 @@
+use std::f32::consts::PI;
 use std::{time::Instant, u64};
 use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use ash::vk::DeviceMemory;
-use cgmath::{Deg, point3, vec3};
+use cgmath::{Deg, Transform, point3, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
 use winit::event::{ButtonSource, ElementState, MouseButton};
@@ -13,7 +14,8 @@ use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{Ac
 use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
-use crate::util::camera::*;
+use crate::util::camera::{self, *};
+use crate::util::math::{self, rotate_x, translate};
 mod util;
 
 type Mat4 = cgmath::Matrix4<f32>;
@@ -372,9 +374,9 @@ impl Engine {
         let z = (((model_index / 2) as f32) * -2.0) + 1.0;
 
         let time = self.start.elapsed().as_secs_f32();
-        let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0) );
+        let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0) * time );
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
-        let opacity = /* (model_index + 1) as f32 * self.opacity_config */ 1.0 as f32;
+        let opacity = 1 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
 
         // Commands
@@ -403,8 +405,7 @@ impl Engine {
     // Update Uniform Buffer Object
     unsafe fn update_uniform_buffer(&mut self, image_index: u32) -> Result<()> {
         // Camera
-        if self.left_clicked && self.cursor_delta.is_some() {
-            println!("Trying to rotate");
+/*         if self.left_clicked && self.cursor_delta.is_some() {
             let delta = self.cursor_delta.take().unwrap();
             let x_ratio = delta[0] as f32 / self.data.swapchain_extent.width as f32;
             let y_ratio = delta[1] as f32 / self.data.swapchain_extent.height as f32;
@@ -415,10 +416,10 @@ impl Engine {
 
         if let Some(wheel_delta) = self.wheel_delta {
             self.camera.foward(wheel_delta * 0.01);
-        }
+        } */
         
         // MVP
-        let aspect =self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
+/*         let aspect =self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
         let view = Mat4::look_at_rh(
             // point3::<f32>(6.0, 0.0, 2.0), 
             self.camera.position(),
@@ -429,20 +430,26 @@ impl Engine {
             0.0, -1.0, 0.0, 0.0, 
             0.0, 0.0, 1.0 / 2.0, 0.0, 
             0.0, 0.0, 1.0 / 2.0, 1.0);
-        let proj = correction * cgmath::perspective(Deg(45.0), aspect, 0.1, 10.0);
+        let proj = correction * cgmath::perspective(Deg(45.0), aspect, 0.1, 40.0); */
+        let fov_angle = PI / 3.0;
+        let aspect_ratio = self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
+        let near = 0.1;
+        let far = 100.0;
+        let projection_matrix = math::perspective(fov_angle, aspect_ratio, far, near);
+        let proj = math::matrix_mult(projection_matrix, math::scale(1.0, -1.0, -1.0));
+        let proj = Mat4::new(proj[0], proj[1], proj[2], proj[3], proj[4], proj[5], proj[6], proj[7], proj[8], proj[9], proj[10], proj[11], proj[12], proj[13], proj[14], proj[15]);
+        let view = math::matrix_mult(rotate_x(-self.camera.rot_y), translate(-self.camera.pos_x, self.camera.pos_y, self.camera.pos_z));
+        let view = Mat4::new(view[0], view[1], view[2], view[3], view[4], view[5], view[6], view[7], view[8], view[9], view[10], view[11], view[12], view[13], view[14], view[15]);
+
         let ubo = UniformBufferObject { view, proj };
         
         let ubos = [ubo];
-        let buffer_mem = self.data.uniform_buffers_memory[image_index as usize];
         let size = size_of::<UniformBufferObject>() as vk::DeviceSize;
-        let device = &self.device;
-        // let data_ptr = device.map_memory(buffer_mem, 0, size, vk::MemoryMapFlags::empty()).unwrap();
-        self.data.allocator.as_mut().unwrap().map_memory(&mut self.data.uniform_allocations[image_index as usize])?;
+        (unsafe { self.data.allocator.as_mut().unwrap().map_memory(&mut self.data.uniform_allocations[image_index as usize]) })?;
         let data_ptr = self.data.allocator.as_ref().unwrap().get_allocation_info(&self.data.uniform_allocations[image_index as usize]).mapped_data;
         let mut align = unsafe { ash::util::Align::new(data_ptr, align_of::<f32>() as _, size) };
         align.copy_from_slice(&ubos);
-        // unsafe { device.unmap_memory(buffer_mem) };
-        self.data.allocator.as_mut().unwrap().unmap_memory(&mut self.data.uniform_allocations[image_index as usize]);
+        unsafe { self.data.allocator.as_mut().unwrap().unmap_memory(&mut self.data.uniform_allocations[image_index as usize]) };
 
         Ok(())
     }
