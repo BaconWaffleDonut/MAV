@@ -85,6 +85,12 @@ impl ApplicationHandler for App {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::ArrowLeft) if self.app.as_mut().unwrap().models > 1 => self.app.as_mut().unwrap().models -= 1,
                         PhysicalKey::Code(KeyCode::ArrowRight) if self.app.as_mut().unwrap().models < 4 => self.app.as_mut().unwrap().models += 1,
+                        PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().camera.pos_x += 0.1,
+                        PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().camera.pos_x -= 0.1,
+                        PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().camera.pos_z += 0.1,
+                        PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().camera.pos_z -= 0.1,
+                        PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().camera.pos_y += 0.1,
+                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().camera.pos_y -= 0.1,
                         _ => {}
                     }
                 }
@@ -438,7 +444,7 @@ impl Engine {
         let projection_matrix = math::perspective(fov_angle, aspect_ratio, far, near);
         let proj = math::matrix_mult(projection_matrix, math::scale(1.0, -1.0, -1.0));
         let proj = Mat4::new(proj[0], proj[1], proj[2], proj[3], proj[4], proj[5], proj[6], proj[7], proj[8], proj[9], proj[10], proj[11], proj[12], proj[13], proj[14], proj[15]);
-        let view = math::matrix_mult(rotate_x(-self.camera.rot_y), translate(-self.camera.pos_x, self.camera.pos_y, self.camera.pos_z));
+        let view = math::matrix_mult(rotate_x(-self.camera.rot_y), translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
         let view = Mat4::new(view[0], view[1], view[2], view[3], view[4], view[5], view[6], view[7], view[8], view[9], view[10], view[11], view[12], view[13], view[14], view[15]);
 
         let ubo = UniformBufferObject { view, proj };
