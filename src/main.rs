@@ -9,13 +9,14 @@ use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
 use winit::event::{ButtonSource, ElementState, MouseButton};
 use winit::event_loop::ControlFlow::Poll;
+use winit::keyboard::KeyCode::ArrowRight;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
 use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
 use crate::util::camera::{self, *};
-use crate::util::math::{self, rotate_x, translate};
+use crate::util::math::{self, matrix_mult, rotate_x, rotate_y, translate};
 mod util;
 
 type Mat4 = cgmath::Matrix4<f32>;
@@ -83,14 +84,18 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     match event.physical_key {
-                        PhysicalKey::Code(KeyCode::ArrowLeft) if self.app.as_mut().unwrap().models > 1 => self.app.as_mut().unwrap().models -= 1,
-                        PhysicalKey::Code(KeyCode::ArrowRight) if self.app.as_mut().unwrap().models < 4 => self.app.as_mut().unwrap().models += 1,
                         PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().camera.pos_x += 0.1,
                         PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().camera.pos_x -= 0.1,
                         PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().camera.pos_z += 0.1,
                         PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().camera.pos_z -= 0.1,
                         PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().camera.pos_y += 0.1,
                         PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().camera.pos_y -= 0.1,
+                        PhysicalKey::Code(KeyCode::ArrowLeft) => self.app.as_mut().unwrap().camera.rot_z -= 0.1,
+                        PhysicalKey::Code(KeyCode::ArrowRight) => self.app.as_mut().unwrap().camera.rot_z += 0.1,
+                        PhysicalKey::Code(KeyCode::ArrowUp) => self.app.as_mut().unwrap().camera.rot_x += 0.1,
+                        PhysicalKey::Code(KeyCode::ArrowDown) => self.app.as_mut().unwrap().camera.rot_x -= 0.1,
+                        PhysicalKey::Code(KeyCode::KeyQ) => self.app.as_mut().unwrap().camera.rot_y -= 0.1,
+                        PhysicalKey::Code(KeyCode::KeyE) => self.app.as_mut().unwrap().camera.rot_y += 0.1,
                         _ => {}
                     }
                 }
@@ -253,7 +258,7 @@ impl Engine {
             frame: 0,
             resized: false,
             start: Instant::now(),
-            models: 1,
+            models: 8,
             resize_dimensions: [WIDTH, HEIGHT],
             minimized: false,
             camera: Default::default(),
@@ -443,8 +448,9 @@ impl Engine {
         let far = 100.0;
         let projection_matrix = math::perspective(fov_angle, aspect_ratio, far, near);
         let proj = math::matrix_mult(projection_matrix, math::scale(1.0, -1.0, -1.0));
+        let rotation = matrix_mult(rotate_x(-self.camera.rot_x), rotate_y(self.camera.rot_y));
         let proj = Mat4::new(proj[0], proj[1], proj[2], proj[3], proj[4], proj[5], proj[6], proj[7], proj[8], proj[9], proj[10], proj[11], proj[12], proj[13], proj[14], proj[15]);
-        let view = math::matrix_mult(rotate_x(-self.camera.rot_y), translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
+        let view = math::matrix_mult(rotation, translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
         let view = Mat4::new(view[0], view[1], view[2], view[3], view[4], view[5], view[6], view[7], view[8], view[9], view[10], view[11], view[12], view[13], view[14], view[15]);
 
         let ubo = UniformBufferObject { view, proj };
