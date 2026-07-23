@@ -4,20 +4,18 @@ use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use ash::vk::DeviceMemory;
-use cgmath::num_traits::{Signed, ToPrimitive};
-use cgmath::{Deg, Transform, point3, vec3};
+use cgmath::num_traits::ToPrimitive;
+use cgmath::{Deg, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::{LogicalPosition, PhysicalSize};
-use winit::event::{ButtonSource, DeviceEvent, ElementState, MouseButton};
+use winit::event::{DeviceEvent, ElementState};
 use winit::event_loop::ControlFlow::Poll;
-use winit::keyboard::KeyCode::ArrowRight;
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::CursorGrabMode;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
 use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
-use crate::util::camera::{self, *};
+use crate::util::camera::*;
 use crate::util::math::{self, matrix_mult, rotate_x, rotate_y, rotate_z, translate};
 mod util;
 
@@ -86,10 +84,10 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     match event.physical_key {
-                        PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().camera.pos_x += 0.1,
-                        PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().camera.pos_x -= 0.1,
-                        PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().camera.pos_z += 0.1,
-                        PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().camera.pos_z -= 0.1,
+                        PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().foward(),
+                        PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().backwards(),
+                        PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().left(),
+                        PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().right(),
                         PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().camera.pos_y += 0.1,
                         PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().camera.pos_y -= 0.1,
                         PhysicalKey::Code(KeyCode::KeyQ) => self.app.as_mut().unwrap().camera.rot_y -= 0.1,
@@ -108,8 +106,7 @@ impl ApplicationHandler for App {
         event_loop: &dyn ActiveEventLoop,
         device_id: Option<winit::event::DeviceId>,
         event: DeviceEvent,
-    )
-    {
+    ) {
         match event {
             DeviceEvent::PointerMotion { delta } => {
                 let camera = self.app.as_ref().unwrap().camera;
@@ -124,6 +121,7 @@ impl ApplicationHandler for App {
                     }
                 }
                 self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000.to_f64().unwrap()) as f32;
+                println!("({}, {})", camera.rot_z.cos(), camera.rot_z.sin() );
             },
 
             _ => {},
@@ -132,7 +130,7 @@ impl ApplicationHandler for App {
     
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
         if let Some(app) = self.app.as_mut() {
-            self.window.as_ref().unwrap().set_cursor_position(LogicalPosition::new(100, 100).into());
+            self.window.as_ref().unwrap().set_cursor_position(LogicalPosition::new(0, 0).into());
         }
     }
 
@@ -542,7 +540,23 @@ impl Engine {
         unsafe { self.data.swapchain_loader.as_ref().unwrap().destroy_swapchain(self.data.swapchain, None) };
     }
 
-    //
+    // Handle Movement
+    fn foward(&mut self) {
+        self.camera.pos_x += self.camera.rot_z.cos() / 10.0;
+        self.camera.pos_z += self.camera.rot_z.sin() / 10.0;
+    }
+    fn backwards(&mut self) {
+        self.camera.pos_x -= self.camera.rot_z.cos() / 10.0;
+        self.camera.pos_z -= self.camera.rot_z.sin() / 10.0;
+    }
+    fn left(&mut self) {
+        self.camera.pos_z += self.camera.rot_z.cos() / 10.0;
+        self.camera.pos_x -= self.camera.rot_z.sin() / 10.0;
+    }
+    fn right(&mut self) {
+        self.camera.pos_z -= self.camera.rot_z.cos() / 10.0;
+        self.camera.pos_x += self.camera.rot_z.sin() / 10.0;
+    }
 }
 
 #[derive(Default)]
