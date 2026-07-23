@@ -84,15 +84,25 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     match event.physical_key {
-                        PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().foward(),
-                        PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().backwards(),
-                        PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().left(),
-                        PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().right(),
-                        PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().camera.pos_y += 0.1,
-                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().camera.pos_y -= 0.1,
+                        PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().foward = true,
+                        PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().backwards = true,
+                        PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().left= true,
+                        PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().right = true,
+                        PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().up = true,
+                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().down = true,
                         PhysicalKey::Code(KeyCode::KeyQ) => self.app.as_mut().unwrap().camera.rot_y -= 0.1,
                         PhysicalKey::Code(KeyCode::KeyE) => self.app.as_mut().unwrap().camera.rot_y += 0.1,
                         _ => {}
+                    }
+                } else if event.state == ElementState::Released {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().up = false,
+                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().down = false,
+                        PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().foward = false,
+                        PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().backwards = false,
+                        PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().left= false,
+                        PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().right = false,
+                        _ => {},
                     }
                 }
             },
@@ -121,7 +131,6 @@ impl ApplicationHandler for App {
                     }
                 }
                 self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000.to_f64().unwrap()) as f32;
-                println!("({}, {})", camera.rot_z.cos(), camera.rot_z.sin() );
             },
 
             _ => {},
@@ -186,10 +195,12 @@ struct Engine {
     resize_dimensions: [u32; 2],
     minimized: bool,
     camera: Camera,
-    wheel_delta: Option<f32>,
-    cursor_delta: Option<[i32; 2]>,
-    cursor_pos: [i32; 2],
-    left_clicked: bool,
+    up: bool,
+    down: bool,
+    foward: bool,
+    backwards: bool,
+    left: bool,
+    right: bool,
 }
 
 impl Engine {
@@ -264,10 +275,12 @@ impl Engine {
             resize_dimensions: [WIDTH, HEIGHT],
             minimized: false,
             camera: Default::default(),
-            wheel_delta: None,
-            cursor_delta: None,
-            cursor_pos: [0, 0],
-            left_clicked: false,
+            up: false,
+            down: false,
+            foward: false,
+            backwards: false,
+            left: false,
+            right: false,
         })
     }
     
@@ -444,6 +457,24 @@ impl Engine {
             0.0, 0.0, 1.0 / 2.0, 0.0, 
             0.0, 0.0, 1.0 / 2.0, 1.0);
         let proj = correction * cgmath::perspective(Deg(45.0), aspect, 0.1, 40.0); */
+        if self.up == true {
+            self.up();
+        }
+        if self.down == true {
+            self.down();
+        }
+        if self.foward == true {
+            self.foward();
+        }
+        if self.backwards == true {
+            self.backwards();
+        }
+        if self.right == true {
+            self.right();
+        }
+        if self.left == true {
+            self.left();
+        }
         let fov_angle = PI / 3.0;
         let aspect_ratio = self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
         let near = 0.1;
@@ -542,20 +573,26 @@ impl Engine {
 
     // Handle Movement
     fn foward(&mut self) {
-        self.camera.pos_x += self.camera.rot_z.cos() / 10.0;
-        self.camera.pos_z += self.camera.rot_z.sin() / 10.0;
+        self.camera.pos_x += self.camera.rot_z.cos() / 100.0;
+        self.camera.pos_z += self.camera.rot_z.sin() / 100.0;
     }
     fn backwards(&mut self) {
-        self.camera.pos_x -= self.camera.rot_z.cos() / 10.0;
-        self.camera.pos_z -= self.camera.rot_z.sin() / 10.0;
+        self.camera.pos_x -= self.camera.rot_z.cos() / 100.0;
+        self.camera.pos_z -= self.camera.rot_z.sin() / 100.0;
     }
     fn left(&mut self) {
-        self.camera.pos_z += self.camera.rot_z.cos() / 10.0;
-        self.camera.pos_x -= self.camera.rot_z.sin() / 10.0;
+        self.camera.pos_z += self.camera.rot_z.cos() / 100.0;
+        self.camera.pos_x -= self.camera.rot_z.sin() / 100.0;
     }
     fn right(&mut self) {
-        self.camera.pos_z -= self.camera.rot_z.cos() / 10.0;
-        self.camera.pos_x += self.camera.rot_z.sin() / 10.0;
+        self.camera.pos_z -= self.camera.rot_z.cos() / 100.0;
+        self.camera.pos_x += self.camera.rot_z.sin() / 100.0;
+    }
+    fn up(&mut self) {
+        self.camera.pos_y += 0.01;
+    }
+    fn down(&mut self) {
+        self.camera.pos_y -= 0.01;
     }
 }
 
