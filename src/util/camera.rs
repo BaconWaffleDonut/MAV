@@ -65,7 +65,7 @@ impl Default for Camera {
             pos_y: 0.0, 
             pos_z: 0.0, 
             rot_x: 0.0, 
-            rot_y: 1.5, 
+            rot_y: 0.0, 
             rot_z: 0.0 }
     }
 }

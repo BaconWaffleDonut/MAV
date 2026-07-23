@@ -16,7 +16,7 @@ use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
 use crate::util::camera::{self, *};
-use crate::util::math::{self, matrix_mult, rotate_x, rotate_y, translate};
+use crate::util::math::{self, matrix_mult, rotate_x, rotate_y, rotate_z, translate};
 mod util;
 
 type Mat4 = cgmath::Matrix4<f32>;
@@ -101,27 +101,10 @@ impl ApplicationHandler for App {
                 }
             },
 
-            WindowEvent::PointerMoved {position, .. } => {
-                let app = self.app.as_mut().unwrap();
-
-                let position: (i32, i32) = position.into();
-                app.cursor_delta = Some([
-                    app.cursor_pos[0] - position.0,
-                    app.cursor_pos[1] - position.1,
-                ]);
-                app.cursor_pos = [position.0, position.1];
-            }
-
-            WindowEvent::PointerButton {state, button, .. } => {
-                self.app.as_mut().unwrap().left_clicked = state == ElementState::Pressed && button == ButtonSource::Mouse(MouseButton::Left);
-                println!("Is left clicked: {}", self.app.as_ref().unwrap().left_clicked);
-            }
-
-            WindowEvent::MouseWheel {
-                delta: winit::event::MouseScrollDelta::LineDelta(_, v_lines),
-                .. 
-            } => {
-                self.app.as_mut().unwrap().wheel_delta = Some(v_lines);
+            WindowEvent::PointerMoved {position, ..} => {
+                self.app.as_mut().unwrap().camera.rot_y = (position.y / 1000.0 as f64) as f32;
+                println!("{}", position.y / 1000.0 as f64);
+                self.app.as_mut().unwrap().camera.rot_x = (position.x / 1000.0 as f64) as f32;
             },
 
             _ => (),
@@ -258,7 +241,7 @@ impl Engine {
             frame: 0,
             resized: false,
             start: Instant::now(),
-            models: 8,
+            models: 9,
             resize_dimensions: [WIDTH, HEIGHT],
             minimized: false,
             camera: Default::default(),
@@ -385,7 +368,7 @@ impl Engine {
         let z = (((model_index / 2) as f32) * -2.0) + 1.0;
 
         let time = self.start.elapsed().as_secs_f32();
-        let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0) * time );
+        let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(0.0) );
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
         let opacity = 1 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
@@ -449,10 +432,11 @@ impl Engine {
         let projection_matrix = math::perspective(fov_angle, aspect_ratio, far, near);
         let proj = math::matrix_mult(projection_matrix, math::scale(1.0, -1.0, -1.0));
         let rotation = matrix_mult(rotate_x(-self.camera.rot_x), rotate_y(self.camera.rot_y));
+        let rotation =  matrix_mult(rotation, rotate_z(self.camera.rot_z));
         let proj = Mat4::new(proj[0], proj[1], proj[2], proj[3], proj[4], proj[5], proj[6], proj[7], proj[8], proj[9], proj[10], proj[11], proj[12], proj[13], proj[14], proj[15]);
         let view = math::matrix_mult(rotation, translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
         let view = Mat4::new(view[0], view[1], view[2], view[3], view[4], view[5], view[6], view[7], view[8], view[9], view[10], view[11], view[12], view[13], view[14], view[15]);
-
+    
         let ubo = UniformBufferObject { view, proj };
         
         let ubos = [ubo];

@@ -34,6 +34,15 @@ pub fn rotate_y(angle: f32) -> [f32; 16] {
     ]
 }
 
+pub fn rotate_z(angle: f32) -> [f32; 16] {
+    [
+        angle.cos(), -(angle.sin()), 0.0, 0.0,
+        angle.sin(), angle.cos(), 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
 pub fn matrix_mult(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
     let mut result = [0.0; 16];
 
