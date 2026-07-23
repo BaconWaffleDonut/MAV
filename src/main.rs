@@ -4,13 +4,15 @@ use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use ash::vk::DeviceMemory;
+use cgmath::num_traits::{Signed, ToPrimitive};
 use cgmath::{Deg, Transform, point3, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
-use winit::dpi::PhysicalSize;
-use winit::event::{ButtonSource, ElementState, MouseButton};
+use winit::dpi::{LogicalPosition, PhysicalSize};
+use winit::event::{ButtonSource, DeviceEvent, ElementState, MouseButton};
 use winit::event_loop::ControlFlow::Poll;
 use winit::keyboard::KeyCode::ArrowRight;
 use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::CursorGrabMode;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, raw_window_handle::{HasDisplayHandle, HasWindowHandle}, window::{Window, WindowAttributes, WindowId}};
 use log::*;
 use ash::{Device, Entry, Instance, khr::swapchain, vk};
@@ -90,10 +92,6 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().camera.pos_z -= 0.1,
                         PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().camera.pos_y += 0.1,
                         PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().camera.pos_y -= 0.1,
-                        PhysicalKey::Code(KeyCode::ArrowLeft) => self.app.as_mut().unwrap().camera.rot_z -= 0.1,
-                        PhysicalKey::Code(KeyCode::ArrowRight) => self.app.as_mut().unwrap().camera.rot_z += 0.1,
-                        PhysicalKey::Code(KeyCode::ArrowUp) => self.app.as_mut().unwrap().camera.rot_x += 0.1,
-                        PhysicalKey::Code(KeyCode::ArrowDown) => self.app.as_mut().unwrap().camera.rot_x -= 0.1,
                         PhysicalKey::Code(KeyCode::KeyQ) => self.app.as_mut().unwrap().camera.rot_y -= 0.1,
                         PhysicalKey::Code(KeyCode::KeyE) => self.app.as_mut().unwrap().camera.rot_y += 0.1,
                         _ => {}
@@ -101,19 +99,40 @@ impl ApplicationHandler for App {
                 }
             },
 
-            WindowEvent::PointerMoved {position, ..} => {
-                self.app.as_mut().unwrap().camera.rot_y = (position.y / 1000.0 as f64) as f32;
-                println!("{}", position.y / 1000.0 as f64);
-                self.app.as_mut().unwrap().camera.rot_x = (position.x / 1000.0 as f64) as f32;
+            _ => (),
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        device_id: Option<winit::event::DeviceId>,
+        event: DeviceEvent,
+    )
+    {
+        match event {
+            DeviceEvent::PointerMotion { delta } => {
+                let camera = self.app.as_ref().unwrap().camera;
+                if delta.1.is_sign_positive() == true {
+                    if camera.rot_x <= PI {
+                        self.app.as_mut().unwrap().camera.rot_x += (delta.1 / 1000.to_f64().unwrap()) as f32;
+                    }
+                }
+                if delta.1.is_sign_negative() == true {
+                    if camera.rot_x >= 0.0 {
+                        self.app.as_mut().unwrap().camera.rot_x += (delta.1 / 1000.to_f64().unwrap()) as f32;
+                    }
+                }
+                self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000.to_f64().unwrap()) as f32;
             },
 
-            _ => (),
+            _ => {},
         }
     }
     
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
         if let Some(app) = self.app.as_mut() {
-            app.wheel_delta = None;
+            self.window.as_ref().unwrap().set_cursor_position(LogicalPosition::new(100, 100).into());
         }
     }
 
@@ -128,6 +147,8 @@ impl ApplicationHandler for App {
             },
         };
         let app = unsafe { Engine::create( window.as_ref(), event_loop).expect("Failed to create application.") };
+        window.as_ref().set_cursor_grab(winit::window::CursorGrabMode::Locked);
+        window.as_ref().set_cursor_visible(false);
         self.app = Some(app);
         self.window = Some(window);
     }
@@ -436,7 +457,7 @@ impl Engine {
         let proj = Mat4::new(proj[0], proj[1], proj[2], proj[3], proj[4], proj[5], proj[6], proj[7], proj[8], proj[9], proj[10], proj[11], proj[12], proj[13], proj[14], proj[15]);
         let view = math::matrix_mult(rotation, translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
         let view = Mat4::new(view[0], view[1], view[2], view[3], view[4], view[5], view[6], view[7], view[8], view[9], view[10], view[11], view[12], view[13], view[14], view[15]);
-    
+
         let ubo = UniformBufferObject { view, proj };
         
         let ubos = [ubo];
