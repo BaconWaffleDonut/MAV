@@ -976,7 +976,8 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
     let image = image::load(cursor, image::ImageFormat::Png).expect("Failed to load image.");
     let image_as_rgb = image.to_rgba8();
     let (width, height) = image_as_rgb.dimensions();
-    data.mip_levels = ( (width.max(height) as f32).log2().floor() + 1.0) as u32;
+    // data.mip_levels = ( (width.max(height) as f32).log2().floor() + 1.0) as u32;
+    data.mip_levels = 16;
     let pixels = image_as_rgb.into_raw();
     let size = (pixels.len() * size_of::<u8>()) as vk::DeviceSize;
 
@@ -1061,8 +1062,8 @@ pub fn generate_mipmaps(instance: &Instance, device: &Device, data: &EngineData,
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .subresource_range(subresource);
-        let mut mip_width = 800;
-        let mut mip_height = 800;
+        let mut mip_width = 512;
+        let mut mip_height = 512;
 
         for i in 1..mip_levels {
             barrier.subresource_range.base_mip_level = i - 1;
@@ -1178,7 +1179,7 @@ pub fn create_texture_sampler(device: &Device, data: &mut EngineData) -> Result<
         .address_mode_w(vk::SamplerAddressMode::REPEAT)
         .anisotropy_enable(false)
         .max_anisotropy(16.0)
-        .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+        .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
         .unnormalized_coordinates(false)
         .compare_enable(false)
         .compare_op(vk::CompareOp::ALWAYS)

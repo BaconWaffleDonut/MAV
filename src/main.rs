@@ -4,7 +4,7 @@ use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use ash::vk::DeviceMemory;
-use cgmath::num_traits::ToPrimitive;
+use cgmath::num_traits::{Signed, ToPrimitive};
 use cgmath::{Deg, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::{LogicalPosition, PhysicalSize};
@@ -89,19 +89,22 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().left= true,
                         PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().right = true,
                         PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().up = true,
-                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().down = true,
+                        PhysicalKey::Code(KeyCode::ControlLeft) => self.app.as_mut().unwrap().down = true,
                         PhysicalKey::Code(KeyCode::KeyQ) => self.app.as_mut().unwrap().camera.rot_y -= 0.1,
                         PhysicalKey::Code(KeyCode::KeyE) => self.app.as_mut().unwrap().camera.rot_y += 0.1,
+                        PhysicalKey::Code(KeyCode::Escape) => self.app.as_mut().unwrap().cursor_lock(),
+                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().boost = 2,
                         _ => {}
                     }
                 } else if event.state == ElementState::Released {
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Space) => self.app.as_mut().unwrap().up = false,
-                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().down = false,
+                        PhysicalKey::Code(KeyCode::ControlLeft) => self.app.as_mut().unwrap().down = false,
                         PhysicalKey::Code(KeyCode::KeyW) => self.app.as_mut().unwrap().foward = false,
                         PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().backwards = false,
                         PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().left= false,
                         PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().right = false,
+                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().boost = 1,
                         _ => {},
                     }
                 }
@@ -120,18 +123,18 @@ impl ApplicationHandler for App {
         match event {
             DeviceEvent::PointerMotion { delta } => {
                 let camera = self.app.as_ref().unwrap().camera;
-                if delta.1.is_sign_positive() == true {
-                    if camera.rot_x <= PI {
-                        self.app.as_mut().unwrap().camera.rot_x += (delta.1 / 1000.to_f64().unwrap()) as f32;
+                if self.app.as_ref().unwrap().cursor_lock == true {
+                        if camera.rot_x <= PI && delta.1.is_sign_negative() {
+                            self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000.to_f64().unwrap()) as f32;
+                            println!("+:{}", camera.rot_x);
+                        } else if camera.rot_x >= 0.0 && delta.1.is_sign_positive() {
+                            self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000.to_f64().unwrap()) as f32;
+                            println!("-:{}", camera.rot_x);
+                        }
+                    
+                    self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000.to_f64().unwrap()) as f32;
                     }
-                }
-                if delta.1.is_sign_negative() == true {
-                    if camera.rot_x >= 0.0 {
-                        self.app.as_mut().unwrap().camera.rot_x += (delta.1 / 1000.to_f64().unwrap()) as f32;
-                    }
-                }
-                self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000.to_f64().unwrap()) as f32;
-            },
+                },
 
             _ => {},
         }
@@ -139,7 +142,13 @@ impl ApplicationHandler for App {
     
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
         if let Some(app) = self.app.as_mut() {
-            self.window.as_ref().unwrap().set_cursor_position(LogicalPosition::new(0, 0).into());
+            if app.cursor_lock == true {
+                self.window.as_mut().unwrap().set_cursor_grab(winit::window::CursorGrabMode::Locked);
+                self.window.as_mut().unwrap().set_cursor_visible(false);
+            } else if app.cursor_lock == false {
+                self.window.as_mut().unwrap().set_cursor_grab(winit::window::CursorGrabMode::None);
+                self.window.as_mut().unwrap().set_cursor_visible(true);
+            }
         }
     }
 
@@ -182,7 +191,7 @@ impl ApplicationHandler for App {
 //====================
 
 
-struct Engine {
+pub struct Engine {
     // Vulkan Stuff
     entry: Entry,
     instance: Instance,
@@ -201,6 +210,8 @@ struct Engine {
     backwards: bool,
     left: bool,
     right: bool,
+    cursor_lock: bool,
+    boost: u8,
 }
 
 impl Engine {
@@ -281,6 +292,8 @@ impl Engine {
             backwards: false,
             left: false,
             right: false,
+            cursor_lock: true,
+            boost: 1,
         })
     }
     
@@ -396,11 +409,11 @@ impl Engine {
         let command_buffer = command_buffers[model_index];
 
         // Model 
-        let y = (((model_index % 2) as f32) * 2.5) - 1.25;
-        let z = (((model_index / 2) as f32) * -2.0) + 1.0;
+        let x = 0.0;
+        let y = (model_index * 2) as f32;
+        let z = 0.0;
 
-        let time = self.start.elapsed().as_secs_f32();
-        let model = Mat4::from_translation(vec3(0.0, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(0.0) );
+        let model = Mat4::from_translation(vec3(x, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(00.0) );
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
         let opacity = 1 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
@@ -431,49 +444,25 @@ impl Engine {
     // Update Uniform Buffer Object
     unsafe fn update_uniform_buffer(&mut self, image_index: u32) -> Result<()> {
         // Camera
-/*         if self.left_clicked && self.cursor_delta.is_some() {
-            let delta = self.cursor_delta.take().unwrap();
-            let x_ratio = delta[0] as f32 / self.data.swapchain_extent.width as f32;
-            let y_ratio = delta[1] as f32 / self.data.swapchain_extent.height as f32;
-            let theta = x_ratio * 180.0_f32.to_radians();
-            let phi = y_ratio * 90.0_f32.to_radians();
-            self.camera.rotate(theta, phi);
-        }
-
-        if let Some(wheel_delta) = self.wheel_delta {
-            self.camera.foward(wheel_delta * 0.01);
-        } */
-        
-        // MVP
-/*         let aspect =self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
-        let view = Mat4::look_at_rh(
-            // point3::<f32>(6.0, 0.0, 2.0), 
-            self.camera.position(),
-            point3::<f32>(0.0, 0.0, 0.0), 
-            vec3(0.0, 0.0, 1.0));
-        let correction = Mat4::new(
-            1.0, 0.0, 0.0, 0.0, 
-            0.0, -1.0, 0.0, 0.0, 
-            0.0, 0.0, 1.0 / 2.0, 0.0, 
-            0.0, 0.0, 1.0 / 2.0, 1.0);
-        let proj = correction * cgmath::perspective(Deg(45.0), aspect, 0.1, 40.0); */
-        if self.up == true {
-            self.up();
-        }
-        if self.down == true {
-            self.down();
-        }
-        if self.foward == true {
-            self.foward();
-        }
-        if self.backwards == true {
-            self.backwards();
-        }
-        if self.right == true {
-            self.right();
-        }
-        if self.left == true {
-            self.left();
+        if self.cursor_lock == true {
+            if self.up == true {
+                self.up();
+            }
+            if self.down == true {
+                self.down();
+            }
+            if self.foward == true {
+                self.foward();
+            }
+            if self.backwards == true {
+                self.backwards();
+            }
+            if self.right == true {
+                self.right();
+            }
+            if self.left == true {
+                self.left();
+            }
         }
         let fov_angle = PI / 3.0;
         let aspect_ratio = self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
@@ -573,26 +562,30 @@ impl Engine {
 
     // Handle Movement
     fn foward(&mut self) {
-        self.camera.pos_x += self.camera.rot_z.cos() / 100.0;
-        self.camera.pos_z += self.camera.rot_z.sin() / 100.0;
+        self.camera.pos_x += self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_z += self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
     }
     fn backwards(&mut self) {
-        self.camera.pos_x -= self.camera.rot_z.cos() / 100.0;
-        self.camera.pos_z -= self.camera.rot_z.sin() / 100.0;
+        self.camera.pos_x -= self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_z -= self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
     }
     fn left(&mut self) {
-        self.camera.pos_z += self.camera.rot_z.cos() / 100.0;
-        self.camera.pos_x -= self.camera.rot_z.sin() / 100.0;
+        self.camera.pos_z += self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_x -= self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
     }
     fn right(&mut self) {
-        self.camera.pos_z -= self.camera.rot_z.cos() / 100.0;
-        self.camera.pos_x += self.camera.rot_z.sin() / 100.0;
+        self.camera.pos_z -= self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_x += self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
     }
     fn up(&mut self) {
-        self.camera.pos_y += 0.01;
+        self.camera.pos_y += 0.01 * self.boost.to_f32().unwrap();
     }
     fn down(&mut self) {
-        self.camera.pos_y -= 0.01;
+        self.camera.pos_y -= 0.01  * self.boost.to_f32().unwrap();
+    }
+    fn cursor_lock(&mut self) {
+        self.cursor_lock = !self.cursor_lock;
+        println!("Is cusor locked: {}", self.cursor_lock);
     }
 }
 
