@@ -1,4 +1,4 @@
-Simple game engine made using Rust and Vulkan. Currently supports both movement and rotation of the camera using fairly standard WASD\Shift\Space keybindings along with the mouse for rotation. 
+Simple game engine made using Rust and Vulkan. Currently supports both movement and rotation of the camera using fairly standard WASD\LCTRL\Space keybindings along with the mouse for rotation. Left shift increases speed tenfold when held. 
 
 LOD's currently take effect too close to the camera, can be disabled by setting mip levels to 1 in engine_functions.rs 
 
