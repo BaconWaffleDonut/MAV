@@ -1,9 +1,9 @@
 #![allow(dead_code, unsafe_op_in_unsafe_fn)]
-use std::{borrow::Cow, ffi::{self, CStr}, hash::{Hash, Hasher}, io::Cursor};
+use std::{borrow::Cow, ffi::{self, CStr}, hash::{Hash, Hasher}, io::Cursor, ptr::dangling};
 use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
 use ash::{
-    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::PhysicalDevice, vk};
+    Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, DescriptorSet, PhysicalDevice}};
 use cgmath::{vec2, vec3};
 use vk_mem::{Alloc, Allocation, Allocator, };
 use winit::{
@@ -133,7 +133,55 @@ pub struct UniformBufferObject {
 #[error("{0}")]
 pub struct SuitabilityError(pub &'static str);
 
+//====================
+// Game Objects
+//====================
 
+const MAX_OBJECTS: usize = 3;
+
+#[derive(Clone)]
+pub struct GameObject {
+    pub position: Vec3,
+    pub rotation: Vec3,
+    pub scale: Vec3,
+
+    pub uniform_buffer: Vec<vk::Buffer>,
+    pub uniform_buffer_memory: Vec<vk::DeviceMemory>,
+
+    pub descriptor_sets: Vec<DescriptorSet>,
+}
+
+impl Default for GameObject {
+    fn default() -> Self {
+        GameObject { 
+            position: vec3(0.0, 0.0, 0.0), 
+            rotation: vec3(0.0, 0.0, 0.0), 
+            scale: vec3(0.0, 0.0, 0.0), 
+            
+            uniform_buffer: vec![], 
+            uniform_buffer_memory: vec![], 
+            
+            descriptor_sets: vec![] }
+    }
+}
+
+pub fn setupGameObjects(data: &mut EngineData) {
+    let mut game_objects = vec![GameObject::default(); MAX_OBJECTS];
+
+    game_objects[0].position = vec3(0.0, 0.0, 0.0);
+    game_objects[0].rotation = vec3(0.0, 0.0, 0.0);
+    game_objects[0].scale = vec3(0.0, 0.0, 0.0);
+
+    game_objects[1].position = vec3(1.0, 1.0, 2.0);
+    game_objects[1].rotation = vec3(2.0, 1.0, 45.0);
+    game_objects[1].scale = vec3(0.5, 2.0, 1.0);
+
+    game_objects[2].position = vec3(0.0, 3.0, 0.0);
+    game_objects[2].rotation = vec3(0.0, 15.0, 0.0);
+    game_objects[2].scale = vec3(0.0, 0.0, 0.0);
+
+    data.game_objects = game_objects;
+}
 
 //====================
 // Instance
@@ -273,19 +321,6 @@ pub fn pick_physical_device(instance: &Instance, entry: &Entry, data: &mut Engin
         Ok((queue_family_index, physical_device))
  }
 
-/* pub fn check_physical_device_extensions() -> Result<([i8], PhysicalDeviceFeatures/*figure out how to pass out features*/)> {
-    let device_extension_names_raw = [
-        swapchain::NAME.as_ptr(),
-    ];
-    let features = vk::PhysicalDeviceFeatures {
-        shader_clip_distance: 1,
-        ..Default::default()
-    };
-    Ok((device_extension_names_raw, features))
-} */
-// Rebuild this section now that I managed to implement QueueFamilyIndices
-// Eventually refactor
-
 pub fn get_msaa_samples(instance: &Instance, data: &EngineData) -> vk::SampleCountFlags {
     let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
     let counts = properties.limits.framebuffer_color_sample_counts & properties.limits.framebuffer_depth_sample_counts;
@@ -354,104 +389,6 @@ pub fn create_logical_device(instance: &Instance, data: &mut EngineData) -> Resu
 //====================
 // Swapchain
 //====================
-
-/* pub fn create_swapchain(instance: &Instance, device: &Device, data: &mut EngineData, width: u32, height: u32, window: &dyn Window, entry: &Entry, event_loop: &dyn ActiveEventLoop) -> Result<()> {
-    // Setup
-    let indices = unsafe { QueueFamilyIndices::get(instance, data.physical_device, data) }?;
-    let surface_capabilites = unsafe { data.surface_loader.as_ref().unwrap().get_physical_device_surface_capabilities(data.physical_device, data.surface).unwrap() };
-    let surface_format_capabilites = unsafe { data.surface_loader.as_ref().unwrap().get_physical_device_surface_formats(data.physical_device, data.surface).unwrap() };
-
-    let surface_format = get_swapchain_surface_format(&surface_format_capabilites);
-    let extent = get_swapchain_extent(surface_capabilites, window);
-    data.swapchain_format = surface_format.format;
-    data.swapchain_extent = extent;
-
-    let mut image_count = surface_capabilites.min_image_count + 1;
-    if surface_capabilites.max_image_count != 0 && image_count > surface_capabilites.max_image_count {
-        image_count = surface_capabilites.max_image_count;
-    } else {
-        vk::SharingMode::EXCLUSIVE;
-    }; 
-    let pre_transform = if surface_capabilites
-        .supported_transforms
-        .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
-        {
-            vk::SurfaceTransformFlagsKHR::IDENTITY
-        } else {
-            surface_capabilites.current_transform
-        };
-    let present_modes = unsafe { data.surface_loader.as_ref().unwrap()
-        .get_physical_device_surface_present_modes(data.physical_device, data.surface)
-        .unwrap() };
-    let present_mode = present_modes
-        .iter()
-        .cloned()
-        .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
-        .unwrap_or(vk::PresentModeKHR::FIFO);
-    let mut queue_family_indices = vec![];
-    let image_sharing_mode = if indices.graphics != indices.present {
-        queue_family_indices.push(indices.graphics);
-        queue_family_indices.push(indices.present);
-        vk::SharingMode::CONCURRENT
-    } else {
-        vk::SharingMode::EXCLUSIVE
-    };
-
-    let swapchain_loader = swapchain::Device::new(&instance, &device);
-    // println!("{:?}", data.surface);
-    // unsafe { data.surface_loader.as_ref().unwrap().destroy_surface(data.surface, None) };
-    // data.surface = unsafe{ash_window::create_surface(&entry, &instance, event_loop.display_handle()?.as_raw(), window.window_handle()?.as_raw(), None)}.expect("Failed to create surface.");
-    // println!("{:?}", data.surface);
-
-    // Create
-    let info =  vk::SwapchainCreateInfoKHR::default()
-        .surface(data.surface)
-        .min_image_count(image_count)
-        .image_format(surface_format.format)
-        .image_color_space(surface_format.color_space)
-        .image_extent(extent)
-        .image_array_layers(1)
-        .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-        .image_sharing_mode(image_sharing_mode)
-        .queue_family_indices(&queue_family_indices)
-        .pre_transform(pre_transform)
-        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-        .present_mode(present_mode)
-        .clipped(true)
-        .old_swapchain(vk::SwapchainKHR::null());
-
-    data.swapchain = unsafe { swapchain_loader.create_swapchain(&info, None)? };
-    data.swapchain_images = unsafe {swapchain_loader.get_swapchain_images(data.swapchain)?};
-    data.swapchain_loader = Some(swapchain_loader);
-
-    Ok(()) 
-
-}
-
-pub fn get_swapchain_extent(capabilities: vk::SurfaceCapabilitiesKHR, window: &dyn Window) -> vk::Extent2D {
-    if capabilities.current_extent.width != u32::MAX {
-        capabilities.current_extent
-    } else {
-        vk::Extent2D::default()
-            .width(window.outer_size().width.clamp(
-                capabilities.min_image_extent.width,
-                capabilities.max_image_extent.width,
-            ))
-            .height(window.outer_size().width.clamp(
-                capabilities.min_image_extent.height,
-                capabilities.max_image_extent.height,
-            ))
-    }
-}
-
-pub fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {
-    formats
-        .iter()
-        .cloned()
-        .find(|f| f .format == vk::Format::B8G8R8A8_SRGB && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
-        .unwrap_or_else(|| formats[0])
-}
-*/
 
 pub fn create_swapchain(data: &mut EngineData, instance: &Instance, device: &Device, resize_dimension: [u32; 2]) {
     // Setup 
@@ -685,7 +622,7 @@ pub fn create_descriptor_set_layout(device: &Device, data: &mut EngineData) -> R
 pub fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> {
     // Stages
 
-    let mut vert_spv = Cursor::new(&include_bytes!("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/shader/texture/vert.spv")); //need to create folders and files
+    let mut vert_spv = Cursor::new(&include_bytes!("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/shader/texture/vert.spv")); 
     let mut frag_spv = Cursor::new(&include_bytes!("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/shader/texture/frag.spv"));
     let vert_code = read_spv(&mut vert_spv).expect("Failed to read Vertex SPV file.");
     let frag_code = read_spv(&mut frag_spv).expect("Failed to read Fragment SPV file.");
@@ -976,8 +913,8 @@ pub fn create_texture_image(instance: &Instance, device: &Device, data: &mut Eng
     let image = image::load(cursor, image::ImageFormat::Png).expect("Failed to load image.");
     let image_as_rgb = image.to_rgba8();
     let (width, height) = image_as_rgb.dimensions();
-    // data.mip_levels = ( (width.max(height) as f32).log2().floor() + 1.0) as u32;
-    data.mip_levels = 16;
+    data.mip_levels = ( (width.max(height) as f32).log2().floor() + 1.0) as u32;
+    // data.mip_levels = 16;
     let pixels = image_as_rgb.into_raw();
     let size = (pixels.len() * size_of::<u8>()) as vk::DeviceSize;
 
@@ -1339,7 +1276,6 @@ pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut E
         data.uniform_buffers.push(uniform_buffer);
         data.uniform_allocations.push(uniform_buffer_memory);
         let uniform_buffer_memory = allocator.get_allocation_info(&uniform_buffer_memory).device_memory;
-        println!("{:?}", uniform_buffer_memory);
         data.uniform_buffers_memory.push(uniform_buffer_memory);
     }
     Ok(())

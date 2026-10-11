@@ -1,9 +1,10 @@
 use std::f32::consts::PI;
+use std::ops::{Deref, DerefMut, Index};
 use std::{time::Instant, u64};
 use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
-use ash::vk::DeviceMemory;
+use ash::vk::{DeviceMemory, Handle};
 use cgmath::num_traits::{Signed, ToPrimitive};
 use cgmath::{Deg, vec3};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
@@ -22,7 +23,6 @@ mod util;
 type Mat4 = cgmath::Matrix4<f32>;
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 800;
-
 
 #[path = "util/file.rs"]
 mod fill; // Only used for testing window creation
@@ -126,10 +126,8 @@ impl ApplicationHandler for App {
                 if self.app.as_ref().unwrap().cursor_lock == true {
                         if camera.rot_x <= PI && delta.1.is_sign_negative() {
                             self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000.to_f64().unwrap()) as f32;
-                            println!("+:{}", camera.rot_x);
                         } else if camera.rot_x >= 0.0 && delta.1.is_sign_positive() {
                             self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000.to_f64().unwrap()) as f32;
-                            println!("-:{}", camera.rot_x);
                         }
                     
                     self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000.to_f64().unwrap()) as f32;
@@ -282,7 +280,7 @@ impl Engine {
             frame: 0,
             resized: false,
             start: Instant::now(),
-            models: 9,
+            models: 3,
             resize_dimensions: [WIDTH, HEIGHT],
             minimized: false,
             camera: Default::default(),
@@ -408,12 +406,13 @@ impl Engine {
         }
         let command_buffer = command_buffers[model_index];
 
-        // Model 
-        let x = 0.0;
-        let y = (model_index * 2) as f32;
-        let z = 0.0;
+        setupGameObjects(&mut self.data);
 
-        let model = Mat4::from_translation(vec3(x, y, z)) * Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(00.0) );
+        let position = self.data.game_objects[model_index].position;
+        let rotation = self.data.game_objects[model_index].rotation;
+
+
+        let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, Deg(1.0) );
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
         let opacity = 1 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
@@ -530,17 +529,19 @@ impl Engine {
         unsafe { self.device.free_memory(self.data.texture_image_memory, None) };
         unsafe { self.device.destroy_image(self.data.texture_image, None) };
         unsafe { self.device.destroy_command_pool(self.data.command_pool, None) };
-        self.device.destroy_descriptor_pool(self.data.descriptor_pool, None);
+        unsafe { self.device.destroy_descriptor_pool(self.data.descriptor_pool, None) };
         unsafe { self.device.destroy_descriptor_set_layout(self.data.descriptor_set_layout, None) };
+        unsafe { self.device.free_memory(self.data.vertex_buffer_memory, None) };
+        let uniform_memory = self.data.uniform_buffers_memory.index(0);
+        unsafe { self.device.free_memory(*uniform_memory, None) };
         unsafe { self.device.destroy_device(None) };
         unsafe { self.data.surface_loader.as_ref().unwrap().destroy_surface(self.data.surface, None) };
         
         if VALIDATION_ENABLED {
-            self.data.debug_utils_loader.as_mut().unwrap().destroy_debug_utils_messenger(self.data.debug_call_back, None);
+            unsafe { self.data.debug_utils_loader.as_mut().unwrap().destroy_debug_utils_messenger(self.data.debug_call_back, None) };
         }
         
         unsafe { self.instance.destroy_instance(None) };
-
         
     }
 
@@ -678,4 +679,7 @@ struct EngineData {
     window_height: u32,
     window_width: u32,
     allocator: Option<Allocator>,
+
+    // Game Objects
+    game_objects: Vec<GameObject>,
 }
