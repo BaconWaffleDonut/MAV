@@ -127,6 +127,7 @@ impl Hash for Vertex {
 pub struct UniformBufferObject {
     pub view: Mat4,
     pub proj: Mat4,
+    pub model: Mat4,
 }
 
 #[derive(Debug, Error)]
@@ -139,13 +140,14 @@ pub struct SuitabilityError(pub &'static str);
 
 const MAX_OBJECTS: usize = 3;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GameObject {
     pub position: Vec3,
     pub rotation: Vec3,
     pub scale: Vec3,
 
     pub uniform_buffer: Vec<vk::Buffer>,
+    pub uniform_buffer_allocation: Vec<Allocation>,
     pub uniform_buffer_memory: Vec<vk::DeviceMemory>,
 
     pub descriptor_sets: Vec<DescriptorSet>,
@@ -159,6 +161,7 @@ impl Default for GameObject {
             scale: vec3(0.0, 0.0, 0.0), 
             
             uniform_buffer: vec![], 
+            uniform_buffer_allocation: vec![],
             uniform_buffer_memory: vec![], 
             
             descriptor_sets: vec![] }
@@ -1260,24 +1263,31 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
 }
 
 pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut EngineData, allocator: &Allocator) -> Result<()> {
-    data.uniform_buffers.clear();
-    data.uniform_buffers_memory.clear();
+    let game_objects = &mut data.game_objects;
+    for i in 0..game_objects.len(){
+        // data.uniform_buffers.clear();
+        // data.uniform_buffers_memory.clear();
+        data.game_objects[i].uniform_buffer.clear();
+        data.game_objects[i].uniform_buffer_memory.clear();
+        data.game_objects[i].uniform_buffer_allocation.clear();
 
-    for n in 0..data.swapchain_images.len() {
-        let count = n;
-        let (uniform_buffer, uniform_buffer_memory) = create_buffer(
-            data,
-            size_of::<UniformBufferObject>() as vk::DeviceSize, 
-            vk::BufferUsageFlags::UNIFORM_BUFFER, 
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-            vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
-            allocator,
-            count)?;
-        data.uniform_buffers.push(uniform_buffer);
-        data.uniform_allocations.push(uniform_buffer_memory);
-        let uniform_buffer_memory = allocator.get_allocation_info(&uniform_buffer_memory).device_memory;
-        data.uniform_buffers_memory.push(uniform_buffer_memory);
-    }
+
+        for n in 0..MAX_FRAMES_IN_FLIGHT {
+            let count = n;
+            let (uniform_buffer, uniform_buffer_memory) = create_buffer(
+                data,
+                size_of::<UniformBufferObject>() as vk::DeviceSize, 
+                vk::BufferUsageFlags::UNIFORM_BUFFER, 
+                vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
+                vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+                allocator,
+                count)?;
+            data.game_objects[i].uniform_buffer.push(uniform_buffer);
+            data.game_objects[i].uniform_buffer_allocation.push(uniform_buffer_memory);
+            let uniform_buffer_memory = allocator.get_allocation_info(&uniform_buffer_memory).device_memory;
+            data.game_objects[i].uniform_buffer_memory.push(uniform_buffer_memory);
+        }
+    };
     Ok(())
 }
 
@@ -1288,15 +1298,16 @@ pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut E
 pub fn create_descriptor_pool(device: &Device, data: &mut EngineData) -> Result<()> {
     let ubo_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::UNIFORM_BUFFER)
-        .descriptor_count(data.swapchain_images.len() as u32);
+        .descriptor_count((data.swapchain_images.len() * MAX_OBJECTS).try_into().unwrap());
     let sampler_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(data.swapchain_images.len() as u32);
+        .descriptor_count((data.swapchain_images.len() * MAX_OBJECTS).try_into().unwrap());
 
     let pool_sizes = &[ubo_size, sampler_size];
     let info = vk::DescriptorPoolCreateInfo::default()
         .pool_sizes(pool_sizes)
-        .max_sets(data.swapchain_images.len() as u32);
+        .max_sets((data.swapchain_images.len() * MAX_OBJECTS).try_into().unwrap())
+        .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
 
     data.descriptor_pool = unsafe { device.create_descriptor_pool(&info, None) }?;
     
@@ -1305,38 +1316,47 @@ pub fn create_descriptor_pool(device: &Device, data: &mut EngineData) -> Result<
 
 pub fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> Result<()> {
     // Allocate
-    let layouts = (0..data.uniform_buffers.len()).map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
-    let info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(data.descriptor_pool)
-        .set_layouts(&layouts);
+    // let layouts = ().map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
+    // let info = vk::DescriptorSetAllocateInfo::default()
+        // .descriptor_pool(data.descriptor_pool)
+        // .set_layouts(&layouts);
 
-    data.descriptor_sets = unsafe { device.allocate_descriptor_sets(&info) }?;
+    for i in 0..MAX_OBJECTS {
 
-    // Update
-    for i in 0..data.swapchain_images.len() {
-        let info = vk::DescriptorBufferInfo::default()
-            .buffer(data.uniform_buffers[i])
-            .offset(0)
-            .range(size_of::<UniformBufferObject>() as u64);
-        let buffer_info = &[info];
-        let ubo_write = vk::WriteDescriptorSet::default()
-            .dst_set(data.descriptor_sets[i])
-            .dst_binding(0)
-            .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(buffer_info);
-        let info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(data.texture_image_view)
-            .sampler(data.texture_sampler);
-        let image_info = &[info];
-        let sampler_write = vk::WriteDescriptorSet::default()
-            .dst_set(data.descriptor_sets[i])
-            .dst_binding(1)
-            .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(image_info);
-        unsafe { device.update_descriptor_sets(&[ubo_write, sampler_write], &[] as &[vk::CopyDescriptorSet]) };
+        let layouts = (0..data.game_objects.len()).map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
+        let info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(data.descriptor_pool)
+            .set_layouts(&layouts);
+
+        data.game_objects[i].descriptor_sets.clear();
+        data.game_objects[i].descriptor_sets = unsafe { device.allocate_descriptor_sets(&info) }?;
+
+        // Update
+        for n in 0..data.game_objects[i].descriptor_sets.len() {
+            let info = vk::DescriptorBufferInfo::default()
+                .buffer(data.game_objects[i].uniform_buffer[n])
+                .offset(0)
+                .range(size_of::<UniformBufferObject>() as u64);
+            let buffer_info = &[info];
+            let ubo_write = vk::WriteDescriptorSet::default()
+                .dst_set(data.game_objects[i].descriptor_sets[n])
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(buffer_info);
+            let info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(data.texture_image_view)
+                .sampler(data.texture_sampler);
+            let image_info = &[info];
+            let sampler_write = vk::WriteDescriptorSet::default()
+                .dst_set(data.game_objects[i].descriptor_sets[n])
+                .dst_binding(1)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(image_info);
+            unsafe { device.update_descriptor_sets(&[ubo_write, sampler_write], &[] as &[vk::CopyDescriptorSet]) };
+        }
     }
     Ok(())
 }

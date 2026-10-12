@@ -7,6 +7,7 @@ use ash::khr::surface;
 use ash::vk::{DeviceMemory, Handle};
 use cgmath::num_traits::{Signed, ToPrimitive};
 use cgmath::{Deg, vec3};
+use softbuffer::SoftBufferError::DamageOutOfRange;
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::{LogicalPosition, PhysicalSize};
 use winit::event::{DeviceEvent, ElementState};
@@ -220,6 +221,7 @@ impl Engine {
     unsafe fn create(window: &dyn Window, event_loop: &dyn ActiveEventLoop) -> Result<Self> {
         let mut data = EngineData::default() ;
         println!("Create mut Data");
+        setupGameObjects(&mut data);
         let entry = unsafe { Entry::load().map_err(|b| anyhow!("{}", b))? };
         println!("Created Entry");
         let instance = create_instance(&mut data, event_loop).expect("MAIN: Failed to create Instace.");
@@ -368,7 +370,7 @@ impl Engine {
             .extent(self.data.swapchain_extent);
         let color_clear_value = vk::ClearValue {
             color: vk::ClearColorValue {
-                float32: [0.0, 0.0, 0.0, 1.0],
+                float32: [0.0, 0.0, 0.0, 0.0],
             },
         };
         let depth_stencil_clear_value = vk::ClearValue {
@@ -406,8 +408,6 @@ impl Engine {
         }
         let command_buffer = command_buffers[model_index];
 
-        setupGameObjects(&mut self.data);
-
         let position = self.data.game_objects[model_index].position;
         let rotation = self.data.game_objects[model_index].rotation;
 
@@ -428,12 +428,16 @@ impl Engine {
 
         unsafe { self.device.begin_command_buffer(command_buffer, &info) }?;
         unsafe { self.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.data.pipeline) };
+        // Bind Index and Vertex Buffers, shared by all objects
         unsafe { self.device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.data.vertex_buffer], &[0]) };
         unsafe { self.device.cmd_bind_index_buffer(command_buffer, self.data.index_buffer, 0, vk::IndexType::UINT32) };
-        unsafe { self.device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.data.pipeline_layout, 0, &[self.data.descriptor_sets[image_index]], &[]) };
-        unsafe { self.device.cmd_push_constants(command_buffer, self.data.pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, model_bytes) };
-        unsafe { self.device.cmd_push_constants(command_buffer, self.data.pipeline_layout, vk::ShaderStageFlags::FRAGMENT, 64, opacity_bytes) };
-        unsafe { self.device.cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0) };
+        // Draw each object with its own descriptor set... somehow :3
+        for i in 0..self.data.game_objects.len() {
+            unsafe { self.device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.data.pipeline_layout, 0, &[self.data.game_objects[i].descriptor_sets[image_index]], &[]) };
+            unsafe { self.device.cmd_push_constants(command_buffer, self.data.pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, model_bytes) };
+            unsafe { self.device.cmd_push_constants(command_buffer, self.data.pipeline_layout, vk::ShaderStageFlags::FRAGMENT, 64, opacity_bytes) };
+            unsafe { self.device.cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0) };
+        }
         unsafe { self.device.end_command_buffer(command_buffer) }?;
 
         Ok(command_buffer)
@@ -475,15 +479,27 @@ impl Engine {
         let view = math::matrix_mult(rotation, translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
         let view = Mat4::new(view[0], view[1], view[2], view[3], view[4], view[5], view[6], view[7], view[8], view[9], view[10], view[11], view[12], view[13], view[14], view[15]);
 
-        let ubo = UniformBufferObject { view, proj };
+        // Update per-object uniform buffers... f***
+        for i in 0..self.data.game_objects.len() {
+            
+            let position = self.data.game_objects[i].position;
+            let rotation = self.data.game_objects[i].rotation;
+
+            let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, Deg(1.0) );
+
+            let ubo = UniformBufferObject { view, proj, model };
+            
+            let ubos = [ubo];
+            let size = size_of::<UniformBufferObject>() as vk::DeviceSize;
+            (unsafe { self.data.allocator.as_mut().unwrap().map_memory(&mut self.data.game_objects[i].uniform_buffer_allocation[i]) })?;
+            let data_ptr = self.data.allocator.as_ref().unwrap().get_allocation_info(&self.data.game_objects[i].uniform_buffer_allocation[i]).mapped_data;
+            let mut align = unsafe { ash::util::Align::new(data_ptr, align_of::<f32>() as _, size) };
+            align.copy_from_slice(&ubos);
+            unsafe { self.data.allocator.as_mut().unwrap().unmap_memory(&mut self.data.game_objects[i].uniform_buffer_allocation[i]) };
+        }
         
-        let ubos = [ubo];
-        let size = size_of::<UniformBufferObject>() as vk::DeviceSize;
-        (unsafe { self.data.allocator.as_mut().unwrap().map_memory(&mut self.data.uniform_allocations[image_index as usize]) })?;
-        let data_ptr = self.data.allocator.as_ref().unwrap().get_allocation_info(&self.data.uniform_allocations[image_index as usize]).mapped_data;
-        let mut align = unsafe { ash::util::Align::new(data_ptr, align_of::<f32>() as _, size) };
-        align.copy_from_slice(&ubos);
-        unsafe { self.data.allocator.as_mut().unwrap().unmap_memory(&mut self.data.uniform_allocations[image_index as usize]) };
+        
+   
 
         Ok(())
     }
