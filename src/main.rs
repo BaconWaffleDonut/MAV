@@ -7,7 +7,6 @@ use ash::khr::surface;
 use ash::vk::{DeviceMemory, Handle};
 use cgmath::num_traits::{Signed, ToPrimitive};
 use cgmath::{Deg, vec3};
-use softbuffer::SoftBufferError::DamageOutOfRange;
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::{LogicalPosition, PhysicalSize};
 use winit::event::{DeviceEvent, ElementState};
@@ -548,8 +547,16 @@ impl Engine {
         unsafe { self.device.destroy_descriptor_pool(self.data.descriptor_pool, None) };
         unsafe { self.device.destroy_descriptor_set_layout(self.data.descriptor_set_layout, None) };
         unsafe { self.device.free_memory(self.data.vertex_buffer_memory, None) };
-        let uniform_memory = self.data.uniform_buffers_memory.index(0);
-        unsafe { self.device.free_memory(*uniform_memory, None) };
+        for i in 0..self.data.game_objects.len() {
+            self.data.game_objects[i].uniform_buffer_allocation.clear();
+                for n in 0..MAX_FRAMES_IN_FLIGHT {
+                    unsafe { self.device.unmap_memory(self.data.game_objects[i].uniform_buffer_memory[n]) };
+                    unsafe { self.device.destroy_buffer(self.data.game_objects[i].uniform_buffer[n], None) };
+                }
+            self.data.game_objects[i].uniform_buffer.clear();
+            self.data.game_objects[i].uniform_buffer_memory.clear();
+            self.data.game_objects[i].descriptor_sets.clear();
+        }
         unsafe { self.device.destroy_device(None) };
         unsafe { self.data.surface_loader.as_ref().unwrap().destroy_surface(self.data.surface, None) };
         
