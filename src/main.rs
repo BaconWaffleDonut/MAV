@@ -1,14 +1,12 @@
 use std::f32::consts::PI;
-use std::ops::{Deref, DerefMut, Index};
 use std::{time::Instant, u64};
 use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
-use ash::vk::{DeviceMemory, Handle};
-use cgmath::num_traits::{Signed, ToPrimitive};
-use cgmath::{Deg, vec3};
+use ash::vk::{DeviceMemory};
+use glam::{Mat4, Vec3, camera};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
-use winit::dpi::{LogicalPosition, PhysicalSize};
+use winit::dpi::{PhysicalSize};
 use winit::event::{DeviceEvent, ElementState};
 use winit::event_loop::ControlFlow::Poll;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -18,15 +16,12 @@ use ash::{Device, Entry, Instance, khr::swapchain, vk};
 use crate::engine_functions::*;
 use crate::util::camera::*;
 use crate::util::math::{self, matrix_mult, rotate_x, rotate_y, rotate_z, translate};
-mod util;
 
-type Mat4 = cgmath::Matrix4<f32>;
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 800;
 
-#[path = "util/file.rs"]
-mod fill; // Only used for testing window creation
 mod engine_functions;
+mod util;
 
 fn main() -> Result<()> {
     pretty_env_logger::init();
@@ -93,7 +88,7 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::KeyQ) => self.app.as_mut().unwrap().camera.rot_y -= 0.1,
                         PhysicalKey::Code(KeyCode::KeyE) => self.app.as_mut().unwrap().camera.rot_y += 0.1,
                         PhysicalKey::Code(KeyCode::Escape) => self.app.as_mut().unwrap().cursor_lock(),
-                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().boost = 2,
+                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().boost = 2.0,
                         _ => {}
                     }
                 } else if event.state == ElementState::Released {
@@ -104,7 +99,7 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::KeyS) => self.app.as_mut().unwrap().backwards = false,
                         PhysicalKey::Code(KeyCode::KeyA) => self.app.as_mut().unwrap().left= false,
                         PhysicalKey::Code(KeyCode::KeyD) => self.app.as_mut().unwrap().right = false,
-                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().boost = 1,
+                        PhysicalKey::Code(KeyCode::ShiftLeft) => self.app.as_mut().unwrap().boost = 1.0,
                         _ => {},
                     }
                 }
@@ -125,12 +120,12 @@ impl ApplicationHandler for App {
                 let camera = self.app.as_ref().unwrap().camera;
                 if self.app.as_ref().unwrap().cursor_lock == true {
                         if camera.rot_x <= PI && delta.1.is_sign_negative() {
-                            self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000.to_f64().unwrap()) as f32;
+                            self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000_f64) as f32;
                         } else if camera.rot_x >= 0.0 && delta.1.is_sign_positive() {
-                            self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000.to_f64().unwrap()) as f32;
+                            self.app.as_mut().unwrap().camera.rot_x -= (delta.1 / 1000_f64) as f32;
                         }
                     
-                    self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000.to_f64().unwrap()) as f32;
+                    self.app.as_mut().unwrap().camera.rot_z -= (delta.0 / 1000_f64) as f32;
                     }
                 },
 
@@ -141,10 +136,10 @@ impl ApplicationHandler for App {
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
         if let Some(app) = self.app.as_mut() {
             if app.cursor_lock == true {
-                self.window.as_mut().unwrap().set_cursor_grab(winit::window::CursorGrabMode::Locked);
+                self.window.as_mut().unwrap().set_cursor_grab(winit::window::CursorGrabMode::Locked).expect("Failed to lock cursor.");
                 self.window.as_mut().unwrap().set_cursor_visible(false);
             } else if app.cursor_lock == false {
-                self.window.as_mut().unwrap().set_cursor_grab(winit::window::CursorGrabMode::None);
+                self.window.as_mut().unwrap().set_cursor_grab(winit::window::CursorGrabMode::None).expect("Failed to unlock cursor.");
                 self.window.as_mut().unwrap().set_cursor_visible(true);
             }
         }
@@ -161,7 +156,7 @@ impl ApplicationHandler for App {
             },
         };
         let app = unsafe { Engine::create( window.as_ref(), event_loop).expect("Failed to create application.") };
-        window.as_ref().set_cursor_grab(winit::window::CursorGrabMode::Locked);
+        window.as_ref().set_cursor_grab(winit::window::CursorGrabMode::Locked).expect("Failed to lock cursor.");
         window.as_ref().set_cursor_visible(false);
         self.app = Some(app);
         self.window = Some(window);
@@ -175,7 +170,7 @@ impl ApplicationHandler for App {
             let size = window.surface_size();
             if size.width > 0 && size.height > 0 {
                 app.resize_dimensions = [size.width, size.height];
-                unsafe { app.recreate_swapchain() };
+                unsafe { app.recreate_swapchain().expect("Failed to recreate swapchain!") };
             } else {
                 return;
             }
@@ -209,7 +204,7 @@ pub struct Engine {
     left: bool,
     right: bool,
     cursor_lock: bool,
-    boost: u8,
+    boost: f32,
 }
 
 impl Engine {
@@ -220,7 +215,7 @@ impl Engine {
     unsafe fn create(window: &dyn Window, event_loop: &dyn ActiveEventLoop) -> Result<Self> {
         let mut data = EngineData::default() ;
         println!("Create mut Data");
-        setupGameObjects(&mut data);
+        setup_game_objects(&mut data);
         let entry = unsafe { Entry::load().map_err(|b| anyhow!("{}", b))? };
         println!("Created Entry");
         let instance = create_instance(&mut data, event_loop).expect("MAIN: Failed to create Instace.");
@@ -292,7 +287,7 @@ impl Engine {
             left: false,
             right: false,
             cursor_lock: true,
-            boost: 1,
+            boost: 1.0,
         })
     }
     
@@ -303,19 +298,19 @@ impl Engine {
         let render_finished_semaphores = self.data.render_finished_semaphores[self.frame];
         let wait_fences = [in_flight_fence];
 
-        self.device.wait_for_fences(&wait_fences, true, u64::MAX).unwrap();
+        unsafe { self.device.wait_for_fences(&wait_fences, true, u64::MAX).unwrap() };
 
-        let result = self.data.swapchain_loader.as_ref().unwrap().acquire_next_image(self.data.swapchain, u64::MAX, image_available_semaphores, vk::Fence::null());
+        let result = unsafe { self.data.swapchain_loader.as_ref().unwrap().acquire_next_image(self.data.swapchain, u64::MAX, image_available_semaphores, vk::Fence::null()) };
         
         let image_index = match result {
             Ok((image_index, _)) => image_index,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return unsafe { self.recreate_swapchain() },
             Err(e) => return Err(anyhow!("MAIN: {}", e)),
         };
-        self.device.reset_fences(&wait_fences).unwrap();
+        unsafe { self.device.reset_fences(&wait_fences).unwrap() };
 
-        self.update_command_buffer(image_index as usize);
-        self.update_uniform_buffer(image_index);     
+        unsafe { self.update_command_buffer(image_index as usize).expect("Failed to update command buffer!") };
+        unsafe { self.update_uniform_buffer(image_index).expect("Failed to update uniform buffer!") };     
         let device = &self.device;
         let wait_semaphores = [image_available_semaphores];
         let signal_sempahores = [render_finished_semaphores];
@@ -343,7 +338,7 @@ impl Engine {
             let result = unsafe { self.data.swapchain_loader.as_ref().unwrap().queue_present(self.data.present_queue, &present_info) };
             match result {
                 Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                    return self.recreate_swapchain()
+                    return unsafe { self.recreate_swapchain() }
                 }
                 Err(error) => panic!("Faield to present queu"),
                 _ => {}
@@ -411,7 +406,7 @@ impl Engine {
         let rotation = self.data.game_objects[model_index].rotation;
 
 
-        let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, Deg(1.0) );
+        let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, 1.0 );
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>()) };
         let opacity = 1 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
@@ -427,15 +422,14 @@ impl Engine {
 
         unsafe { self.device.begin_command_buffer(command_buffer, &info) }?;
         unsafe { self.device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.data.pipeline) };
-        // Bind Index and Vertex Buffers, shared by all objects
-        unsafe { self.device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.data.vertex_buffer], &[0]) };
-        unsafe { self.device.cmd_bind_index_buffer(command_buffer, self.data.index_buffer, 0, vk::IndexType::UINT32) };
-        // Draw each object with its own descriptor set... somehow :3
+        // Draw each object with its own descriptor set, vertex buffer, and index buffer...
         for i in 0..self.data.game_objects.len() {
+            unsafe { self.device.cmd_bind_vertex_buffers(command_buffer, 0, &[self.data.vertex_buffer], &[0]) };
+            unsafe { self.device.cmd_bind_index_buffer(command_buffer, self.data.index_buffer, 0, vk::IndexType::UINT32) };
             unsafe { self.device.cmd_bind_descriptor_sets(command_buffer, vk::PipelineBindPoint::GRAPHICS, self.data.pipeline_layout, 0, &[self.data.game_objects[i].descriptor_sets[image_index]], &[]) };
             unsafe { self.device.cmd_push_constants(command_buffer, self.data.pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, model_bytes) };
             unsafe { self.device.cmd_push_constants(command_buffer, self.data.pipeline_layout, vk::ShaderStageFlags::FRAGMENT, 64, opacity_bytes) };
-            unsafe { self.device.cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0) };
+            unsafe { self.device.cmd_draw_indexed(command_buffer, self.data.game_objects[i].indices.len() as u32, 1, 0, 0, 0) };
         }
         unsafe { self.device.end_command_buffer(command_buffer) }?;
 
@@ -466,36 +460,46 @@ impl Engine {
                 self.left();
             }
         }
-        let fov_angle = PI / 3.0;
+        let fov_angle = PI / 6.0;
         let aspect_ratio = self.data.swapchain_extent.width as f32 / self.data.swapchain_extent.height as f32;
         let near = 0.1;
-        let far = 100.0;
-        let projection_matrix = math::perspective(fov_angle, aspect_ratio, far, near);
-        let proj = math::matrix_mult(projection_matrix, math::scale(1.0, -1.0, -1.0));
-        let rotation = matrix_mult(rotate_x(-self.camera.rot_x), rotate_y(self.camera.rot_y));
-        let rotation =  matrix_mult(rotation, rotate_z(self.camera.rot_z));
-        let proj = Mat4::new(proj[0], proj[1], proj[2], proj[3], proj[4], proj[5], proj[6], proj[7], proj[8], proj[9], proj[10], proj[11], proj[12], proj[13], proj[14], proj[15]);
-        let view = math::matrix_mult(rotation, translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
-        let view = Mat4::new(view[0], view[1], view[2], view[3], view[4], view[5], view[6], view[7], view[8], view[9], view[10], view[11], view[12], view[13], view[14], view[15]);
+        let far = 10.0;
+        // let projection_matrix = math::perspective(fov_angle, aspect_ratio, far, near);
+        // let proj = math::matrix_mult(projection_matrix, math::scale(1.0, -1.0, -1.0));
+        // let rotation = matrix_mult(rotate_x(-self.camera.rot_x), rotate_y(self.camera.rot_y));
+        // let rotation =  matrix_mult(rotation, rotate_z(self.camera.rot_z));
+        // let proj = Mat4::from_cols_array(&proj);
+        // let view = math::matrix_mult(rotation, translate(-self.camera.pos_x, -self.camera.pos_y, self.camera.pos_z));
+        // let view = Mat4::from_cols_array(&view);
+
+        let proj = camera::rh::proj::vulkan::perspective(1.0, aspect_ratio, near, far);
+        let view = camera::rh::view::look_to_mat4(
+            glam::Vec3 { x: self.camera.pos_x, y: self.camera.pos_y, z: self.camera.pos_z }, 
+            Vec3 { x: self.camera.rot_x, y: self.camera.rot_y, z: self.camera.rot_z }, 
+            Vec3 { x: 0.0, y: 1.0, z: 0.0 });
 
         // Update per-object uniform buffers... f***
-        for i in 0..self.data.game_objects.len() {
-            
-            let position = self.data.game_objects[i].position;
-            let rotation = self.data.game_objects[i].rotation;
 
-            let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, Deg(1.0) );
+        // 11/12/26
+        // No idea what to do now... its all f**cked... like do i revert to before removing cgmath or do i keep pushing on glam and try to get that to work... f***
+
+        // for i in 0..self.data.game_objects.len() {
+            
+            let position = self.data.game_objects[0].position;
+            let rotation = self.data.game_objects[0].rotation;
+
+            let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, 0.0 );
 
             let ubo = UniformBufferObject { view, proj, model };
             
             let ubos = [ubo];
             let size = size_of::<UniformBufferObject>() as vk::DeviceSize;
-            (unsafe { self.data.allocator.as_mut().unwrap().map_memory(&mut self.data.game_objects[i].uniform_buffer_allocation[i]) })?;
-            let data_ptr = self.data.allocator.as_ref().unwrap().get_allocation_info(&self.data.game_objects[i].uniform_buffer_allocation[i]).mapped_data;
+            (unsafe { self.data.allocator.as_mut().unwrap().map_memory(&mut self.data.game_objects[0].uniform_buffer_allocation[0]) })?;
+            let data_ptr = self.data.allocator.as_ref().unwrap().get_allocation_info(&self.data.game_objects[0].uniform_buffer_allocation[0 ]).mapped_data;
             let mut align = unsafe { ash::util::Align::new(data_ptr, align_of::<f32>() as _, size) };
             align.copy_from_slice(&ubos);
-            unsafe { self.data.allocator.as_mut().unwrap().unmap_memory(&mut self.data.game_objects[i].uniform_buffer_allocation[i]) };
-        }
+            unsafe { self.data.allocator.as_mut().unwrap().unmap_memory(&mut self.data.game_objects[0].uniform_buffer_allocation[0]) };
+        // }
         
         
    
@@ -532,8 +536,10 @@ impl Engine {
         self.data.render_finished_semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
         self.data.image_available_semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
         self.data.command_pools.iter().for_each(|p| unsafe { self.device.destroy_command_pool(*p, None) });
-        unsafe { allocator.destroy_buffer(self.data.index_buffer, self.data.index_allocation.as_mut().unwrap()) };
-        unsafe { allocator.destroy_buffer(self.data.vertex_buffer, self.data.vertex_allocation.as_mut().unwrap()) };
+        for i in 0..self.data.game_objects.len() {
+            unsafe { allocator.destroy_buffer(self.data.index_buffer, self.data.index_allocation.as_mut().unwrap()) };
+            unsafe { allocator.destroy_buffer(self.data.vertex_buffer, self.data.vertex_allocation.as_mut().unwrap()) };
+        }
         let ubo_count= self.data.uniform_buffers.len() ;
         for n in 0..ubo_count {
             let allocation = &mut self.data.uniform_allocations;
@@ -546,8 +552,9 @@ impl Engine {
         unsafe { self.device.destroy_command_pool(self.data.command_pool, None) };
         unsafe { self.device.destroy_descriptor_pool(self.data.descriptor_pool, None) };
         unsafe { self.device.destroy_descriptor_set_layout(self.data.descriptor_set_layout, None) };
-        unsafe { self.device.free_memory(self.data.vertex_buffer_memory, None) };
         for i in 0..self.data.game_objects.len() {
+            unsafe { self.device.free_memory(self.data.vertex_buffer_memory, None) };
+            unsafe { self.device.free_memory(self.data.index_buffer_memory, None) };
             self.data.game_objects[i].uniform_buffer_allocation.clear();
                 for n in 0..MAX_FRAMES_IN_FLIGHT {
                     unsafe { self.device.unmap_memory(self.data.game_objects[i].uniform_buffer_memory[n]) };
@@ -572,7 +579,7 @@ impl Engine {
     unsafe fn destroy_swapchain(&mut self) {
         unsafe { self.device.destroy_image_view(self.data.depth_image_view, None) };
         unsafe { self.device.free_memory(self.data.depth_image_memory, None) };
-        self.device.destroy_image(self.data.depth_image, None);
+        unsafe { self.device.destroy_image(self.data.depth_image, None) };
         unsafe { self.device.destroy_image_view(self.data.color_image_view, None) };
         unsafe { self.device.free_memory(self.data.color_image_memory, None) };
         unsafe { self.device.destroy_image(self.data.color_image, None) };
@@ -586,26 +593,26 @@ impl Engine {
 
     // Handle Movement
     fn foward(&mut self) {
-        self.camera.pos_x += self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
-        self.camera.pos_z += self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_x += self.camera.rot_z.cos() / 100.0 * self.boost;
+        self.camera.pos_z += self.camera.rot_z.sin() / 100.0 * self.boost;
     }
     fn backwards(&mut self) {
-        self.camera.pos_x -= self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
-        self.camera.pos_z -= self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_x -= self.camera.rot_z.cos() / 100.0 * self.boost;
+        self.camera.pos_z -= self.camera.rot_z.sin() / 100.0 * self.boost;
     }
     fn left(&mut self) {
-        self.camera.pos_z += self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
-        self.camera.pos_x -= self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_z += self.camera.rot_z.cos() / 100.0 * self.boost;
+        self.camera.pos_x -= self.camera.rot_z.sin() / 100.0 * self.boost;
     }
     fn right(&mut self) {
-        self.camera.pos_z -= self.camera.rot_z.cos() / 100.0 * self.boost.to_f32().unwrap();
-        self.camera.pos_x += self.camera.rot_z.sin() / 100.0 * self.boost.to_f32().unwrap();
+        self.camera.pos_z -= self.camera.rot_z.cos() / 100.0 * self.boost;
+        self.camera.pos_x += self.camera.rot_z.sin() / 100.0 * self.boost;
     }
     fn up(&mut self) {
-        self.camera.pos_y += 0.01 * self.boost.to_f32().unwrap();
+        self.camera.pos_y += 0.01 * self.boost;
     }
     fn down(&mut self) {
-        self.camera.pos_y -= 0.01  * self.boost.to_f32().unwrap();
+        self.camera.pos_y -= 0.01  * self.boost;
     }
     fn cursor_lock(&mut self) {
         self.cursor_lock = !self.cursor_lock;
@@ -669,8 +676,8 @@ struct EngineData {
     texture_sampler: vk::Sampler,
 
     // Model
-    vertices: Vec<engine_functions::Vertex>,
-    indices: Vec<u32>,
+    // vertices: Vec<engine_functions::Vertex>,
+    // indices: Vec<u32>,
 
     // Buffers
     vertex_allocation: Option<Allocation>,
@@ -705,4 +712,6 @@ struct EngineData {
 
     // Game Objects
     game_objects: Vec<GameObject>,
+
+    loaded_meshes: Vec<u32>,
 }

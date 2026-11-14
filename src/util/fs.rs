@@ -12,3 +12,12 @@ pub fn load<P: AsRef<Path>>(path: P) -> Cursor<Vec<u8>> {
     file.read_to_end(&mut buf).unwrap();
     Cursor::new(buf)
 }
+
+pub fn model_file_lookup(model_number: u32) -> [&'static str; 3] {
+    match model_number {
+        1 => ["viking_room.obj", "pic.png", "png"],
+        2 => ["chalet.obj", "chalet.jpg", "jpg"],
+        _ => panic!("Invalid model number submitted. Please submit valid model number.")
+        
+    }
+}

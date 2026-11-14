@@ -1,7 +1,5 @@
 use std::f32::consts::PI;
 
-use cgmath::{Vector2, vec2};
-
 #[derive(Clone, Copy)]
 pub struct Camera {
     pub(crate) pos_x: f32,
