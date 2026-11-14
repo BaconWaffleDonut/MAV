@@ -1,17 +1,17 @@
 #![allow(dead_code, unsafe_op_in_unsafe_fn)]
-use std::{borrow::Cow, ffi::{self, CStr}, hash::{Hash, Hasher}, io::Cursor};
+use std::{borrow::Cow, ffi::{self, CStr}, hash::{Hash, Hasher}, io::Cursor, ptr::dangling};
 use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
 use ash::{
     Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, DescriptorSet, PhysicalDevice}};
-use glam::{Vec4, vec2, vec3};
+use cgmath::{vec2, vec3};
 use vk_mem::{Alloc, Allocation, Allocator, };
 use winit::{
     event_loop::ActiveEventLoop, raw_window_handle::HasDisplayHandle};
 use anyhow::{Ok, Result, anyhow};
 use thiserror::Error;
 use std::ptr::copy_nonoverlapping as memcpy;
-use crate::{EngineData, util::fs::model_file_lookup};
+use crate::EngineData;
 use crate::util::*;
 
 const APP_NAME: &CStr = c"Testing";
@@ -60,13 +60,12 @@ pub const MAX_FRAMES_IN_FLIGHT: usize = 3;
 
 type Vec2 = glam::Vec2;
 type Vec3 = glam::Vec3;
-type Mat4 = glam::Mat4;
+type Mat4 = cgmath::Matrix4<f32>;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
     pos: Vec3,
-    // normal: Vec3,
     color: Vec3,
     tex_coord: Vec2,
 }
@@ -88,21 +87,16 @@ impl Vertex {
             .location(0)
             .format(vk::Format::R32G32B32_SFLOAT)
             .offset(0);
-        // let normal = vk::VertexInputAttributeDescription::default()
-        //     .binding(0)
-        //     .location(1)
-        //     .format(vk::Format::R32G32B32_SFLOAT)
-        //     .offset(size_of::<Vec3>() as u32);
         let color = vk::VertexInputAttributeDescription::default()
             .binding(0)
             .location(1)
             .format(vk::Format::R32G32B32_SFLOAT)
-            .offset((size_of::<Vec3>() * 2) as u32);
+            .offset(size_of::<Vec3>() as u32);
         let tex_coord = vk::VertexInputAttributeDescription::default()
             .binding(0)
             .location(2)
             .format(vk::Format::R32G32_SFLOAT)
-            .offset((size_of::<Vec3>() * 3) as u32);
+            .offset((size_of::<Vec3>() + size_of::<Vec3>()) as u32);
         [pos, color, tex_coord]
     }
 }
@@ -128,32 +122,12 @@ impl Hash for Vertex {
     }
 }
 
-struct Material {
-    base_color_factor: Vec4,
-    metallic_factor: f32,
-    roughness_factor: f32,
-    emissive_factor: Vec<f32>,
-
-    base_color_texture_index: u32,
-    metallic_roughness_texture_index: u32,
-    normal_texture_index: u32,
-    occlusion_texture_index: u32,
-    emissive_texture_index: u32,
-}
-
-struct Mesh {
-    vertices: Vec<Vertex>,
-    indices: Vec<u32>,
-    material_index: u32,
-
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct UniformBufferObject {
     pub view: Mat4,
     pub proj: Mat4,
-    pub model: Mat4,
+    pub model: glam::Mat4,
 }
 
 #[derive(Debug, Error)]
@@ -177,51 +151,37 @@ pub struct GameObject {
     pub uniform_buffer_memory: Vec<vk::DeviceMemory>,
 
     pub descriptor_sets: Vec<DescriptorSet>,
-
-    pub model_number: u32,
-    // use number based modeling here before matching a model number to a vector containg both the .obj file and texture file name, possibly extract the path and redo that logic as well.
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
 }
 
 impl Default for GameObject {
     fn default() -> Self {
         GameObject { 
-            position: vec3(0.0, 0.0, 0.0), 
-            rotation: vec3(0.0, 0.0, 0.0), 
-            scale: vec3(0.0, 0.0, 0.0), 
+            position: Vec3::new(0.0, 0.0, 0.0), 
+            rotation: Vec3::new(0.0, 0.0, 0.0), 
+            scale: Vec3::new(0.0, 0.0, 0.0), 
             
             uniform_buffer: vec![], 
             uniform_buffer_allocation: vec![],
             uniform_buffer_memory: vec![], 
             
-            descriptor_sets: vec![], 
-
-            model_number: 0,
-
-            vertices: vec![],
-            indices: vec![],
-        }
+            descriptor_sets: vec![] }
     }
 }
 
-pub fn setup_game_objects(data: &mut EngineData) {
+pub fn setupGameObjects(data: &mut EngineData) {
     let mut game_objects = vec![GameObject::default(); MAX_OBJECTS];
 
-    game_objects[0].position = vec3(0.0, 0.0, 0.0);
-    game_objects[0].rotation = vec3(0.0, 0.0, 0.0);
-    game_objects[0].scale = vec3(0.0, 0.0, 0.0);
-    game_objects[0].model_number = 1;
+    game_objects[0].position = Vec3::new(0.0, 0.0, 0.0);
+    game_objects[0].rotation = Vec3::new(0.0, 0.0, 0.0);
+    game_objects[0].scale = Vec3::new(0.0, 0.0, 0.0);
 
-    // game_objects[1].position = vec3(1.0, 1.0, 2.0);
-    // game_objects[1].rotation = vec3(2.0, 1.0, 45.0);
-    // game_objects[1].scale = vec3(0.5, 2.0, 1.0);
-    // game_objects[1].model_number = 2;
+    game_objects[1].position = Vec3::new(1.0, 1.0, 2.0);
+    game_objects[1].rotation = Vec3::new(2.0, 1.0, 45.0);
+    game_objects[1].scale = Vec3::new(0.5, 2.0, 1.0);
 
-    // game_objects[2].position = vec3(0.0, 3.0, 0.0);
-    // game_objects[2].rotation = vec3(0.0, 15.0, 0.0);
-    // game_objects[2].scale = vec3(0.0, 0.0, 0.0);
-    // game_objects[2].model_number = 1;
+    game_objects[2].position = Vec3::new(0.0, 3.0, 0.0);
+    game_objects[2].rotation = Vec3::new(0.0, 15.0, 0.0);
+    game_objects[2].scale = Vec3::new(0.0, 0.0, 0.0);
 
     data.game_objects = game_objects;
 }
@@ -1178,71 +1138,40 @@ pub fn create_texture_sampler(device: &Device, data: &mut EngineData) -> Result<
 
 pub fn load_model(data: &mut EngineData) -> Result<()> {
     // Model
+    let viking_room = tobj::load_obj("/home/baconwaffledonut/Documents/Devel/Coding/Stardance/mav/src/resources/viking_room.obj", &tobj::LoadOptions{triangulate: true, ..Default::default()});
+    assert!(viking_room.is_ok());
+    let (models, materials) = viking_room.expect("Failed to load OBJ file.");
 
-    // Push loaded model and textures to unique buffer array
-    // Then use the array to both re-utilize meshes and texture... 
-    // Or just toss an array of vertices and indices into a struct array that can be queried to allow for mesh reuse
-    // IE: Vec<[vertices, indices], [vertices, indices]...>
-    // Will need some way to located the needed vertice/indice arrays as not every model could be loaded, ie if only load models 1/3/17, then querying for model 17 will result in error
-    // because when inserted into example Vec structure they will assume the indices of 1/2/3
+    // Vertices / Indices
+    let mut unique_vertices = AHashMap::new();
+    for model in &models {
+        for index in &model.mesh.indices {
+            let pos_offset = (3 * index) as usize;
+            let tex_coord_offset = (2 * index) as usize;
 
-    // This idea can then be replicated for textures as well, however a system will be needed to ensure proper texture application. 
-    // For example trying to render a spherical texture onto a rectangle is not ideal, thus likely use some form of hash or ID to ensure a proper match.
-    // For example a basic cube could have an ID of 1 whereas the viking room could be an ID of 2, then if you are trying to load a texture that has an ID of 1 onto a model with ID 2 throw an error and revert to BLURPLE texture
-
-    // A basic way to store the vert/indi array would be to tack on an identifier and then iterate through the Vec, seeing if each indices of the Vec contains the ID we are looking for
-    // However this is a very unoptimal solution and a more efficient way likely exists. 
-    // For the aforementioned method I could then use then pass out the Vec index of where the needed model information is located, however this would also need to be done for every frame or rather whenever the scene is changed which seems expensive
-    // Same principle would apply to locating textures.
-
-    // Also need to include some system to ensure that we don't reload meshes an unecessary amount of time. 
-
-    // for i in 0..data.game_objects.len() {
-        // if !data.loaded_meshes.contains(&data.game_objects[i].model_number) {
-            // println!("{}", data.game_objects[i].model_number);
-            let model_info = model_file_lookup(data.game_objects[0].model_number);
-            let model_file = model_info[0];
-            let file_path = format!("./src/resources/{model_file}");
-            println!("{file_path}");
-            let model = tobj::load_obj(file_path, &tobj::LoadOptions {triangulate: true, ..Default::default()});
-            let (models, materials) = model.expect("Failed to load .obj file.");
-            
-            // Vertices / Indices
-            let mut unique_vertices = AHashMap::new();
-            for model in &models {
-            for index in &model.mesh.indices {
-                let pos_offset = (3 * index) as usize;
-                let tex_coord_offset = (2 * index) as usize;
-            
-                let vertex = Vertex {
-                    pos: vec3(
-                        model.mesh.positions[pos_offset],
-                        model.mesh.positions[pos_offset + 1] ,
-                        model.mesh.positions[pos_offset + 2],
-                        ),
-                    color: vec3(1.0, 1.0, 1.0),
-                    tex_coord: vec2(
-                        model.mesh.texcoords[tex_coord_offset],
-                        1.0 - model.mesh.texcoords[tex_coord_offset + 1],
+            let vertex = Vertex {
+                pos: Vec3::new(
+                    model.mesh.positions[pos_offset],
+                    model.mesh.positions[pos_offset + 1] ,
+                    model.mesh.positions[pos_offset + 2],
                     ),
-                    // normal: vec![1.0.to_f32().unwrap()],
-                };
-            
-                if let Some(index) = unique_vertices.get(&vertex) {
-                    data.game_objects[0].indices.push(*index as u32);
-                } else {
-                    let index = data.game_objects[0].vertices.len();
-                    unique_vertices.insert(vertex, index);
-                    data.game_objects[0].vertices.push(vertex);
-                    data.game_objects[0].indices.push(index as u32);
-                }
-                }
+                color: Vec3::new(1.0, 1.0, 1.0),
+                tex_coord: glam::Vec2::new(
+                    model.mesh.texcoords[tex_coord_offset],
+                    1.0 - model.mesh.texcoords[tex_coord_offset + 1],
+                ),
+            };
+
+            if let Some(index) = unique_vertices.get(&vertex) {
+                data.indices.push(*index as u32);
+            } else {
+                let index = data.vertices.len();
+                unique_vertices.insert(vertex, index);
+                data.vertices.push(vertex);
+                data.indices.push(index as u32);
             }
-            data.loaded_meshes.push(data.game_objects[0].model_number);
-        // } else {
-            // println!("Model is already loaded: {:?}", data.game_objects[i].model_number);
-        // }
-    //}
+        }
+    }
 
     Ok(())
 
@@ -1254,99 +1183,82 @@ pub fn load_model(data: &mut EngineData) -> Result<()> {
 
 pub fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut EngineData, allocator: &Allocator) -> Result<()> {
     // Create Staging
-    let vertices_size = data.game_objects[0].vertices.len();
-    // for i in 0..data.game_objects.len() {
-        // vertices_size = vertices_size + data.game_objects[i].vertices.len();
-    // }
-        let size = (size_of::<Vertex>() * vertices_size) as u64;
-        let (staging_buffer, mut staging_buffer_memory) = create_buffer(
+    let size = (size_of::<Vertex>() * data.vertices.len()) as u64;
+    let (staging_buffer, mut staging_buffer_memory) = create_buffer(
+    data,
+    size,
+    vk::BufferUsageFlags::TRANSFER_SRC,
+    vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
+    vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+    allocator,
+    0)?;
+    // Copy Staging
+    let memory = unsafe { allocator.map_memory(&mut staging_buffer_memory) }?;
+    unsafe { memcpy(data.vertices.as_ptr(), memory.cast(), data.vertices.len()) };
+    unsafe { allocator.unmap_memory(&mut staging_buffer_memory) };   
+    
+    // Create Vertex
+    println!("Create Vertex Buffer");
+    let (vertex_buffer, vertex_buffer_memory) = create_buffer( 
         data,
         size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-        vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER, 
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        vk_mem::AllocationCreateFlags::empty(),
         allocator,
         0)?;
+    data.vertex_allocation = Some(vertex_buffer_memory);
+    let vertex_buffer_memory = allocator.get_allocation_info(&vertex_buffer_memory).device_memory;
+    data.vertex_buffer = vertex_buffer;
+    data.vertex_buffer_memory = vertex_buffer_memory;
 
-        // Copy Staging
-        let memory = unsafe { allocator.map_memory(&mut staging_buffer_memory) }?;
-        unsafe { memcpy(data.game_objects[0].vertices.as_ptr(), memory.cast(), data.game_objects[0].vertices.len()) };
-        unsafe { allocator.unmap_memory(&mut staging_buffer_memory) };   
-
-        // Create Vertex
-        println!("Create Vertex Buffer");
-        let (vertex_buffer, vertex_buffer_memory) = create_buffer( 
-            data,
-            size,
-            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER, 
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk_mem::AllocationCreateFlags::empty(),
-            allocator,
-            0)?;
-        data.vertex_allocation = Some(vertex_buffer_memory);
-        let vertex_buffer_memory = allocator.get_allocation_info(&vertex_buffer_memory).device_memory;
-        data.vertex_buffer = vertex_buffer;
-        data.vertex_buffer_memory = vertex_buffer_memory;
-        
-        // Copy Vertex
-        copy_buffer(device, data, staging_buffer, vertex_buffer, size)?;
-
-        // Cleanup
-        unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
-
-        /* alright so my idea is to find some way to combine all the vertices and shit into one data struct or array, in this case for the length i just created a dummy var and function to add up the length of every vertex array
-        not sure what to do next as it also needs the vertices per object which means id have to like extract the vertices and make one massive list of every vertex and do the same for indices...
-        too tired to think about this
-        will revisit later
-        
-         */
+    // Copy Vertex
+    copy_buffer(device, data, staging_buffer, vertex_buffer, size)?;
+    
+    // Cleanup
+    unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
     
     Ok(())
 }
 
 pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut EngineData, allocator: &Allocator) -> Result<()> {
     // Create Staging
-    // for i in 0..data.game_objects.len() {
-    let size_of_indices = data.game_objects[0].indices.len();
-    // for i in 0..data.game_objects.len() {
-        // size_of_indices = size_of_indices + data.game_objects[i].indices.len();
-    // }
-        let size = (size_of::<u32>() * size_of_indices) as u64;
+    let size = (size_of::<u32>() * data.indices.len()) as u64;
 
-        let (staging_buffer, mut staging_buffer_memory) = create_buffer(
-            data,
-            size,
-            vk::BufferUsageFlags::TRANSFER_SRC, 
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-            vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
-            allocator,
-            0)?;
-        
-        // Copy Staging
-        let memory = unsafe { allocator.map_memory(&mut staging_buffer_memory) }?;
-        unsafe { memcpy(data.game_objects[0].indices.as_ptr(), memory.cast(), data.game_objects[0].indices.len()) };
-        unsafe { allocator.unmap_memory(&mut staging_buffer_memory) };
+    let (staging_buffer, mut staging_buffer_memory) = create_buffer(
+        data,
+        size,
+        vk::BufferUsageFlags::TRANSFER_SRC, 
+        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
+        vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+        allocator,
+        0)?;
+    
+    // Copy Staging
+    let memory = unsafe { allocator.map_memory(&mut staging_buffer_memory) }?;
+    unsafe { memcpy(data.indices.as_ptr(), memory.cast(), data.indices.len()) };
+    unsafe { allocator.unmap_memory(&mut staging_buffer_memory) };
 
-        // Create Index
-        let (index_buffer, index_buffer_memory) = create_buffer(
-            data,
-            size,
-            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER, 
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk_mem::AllocationCreateFlags::empty(),
-            allocator,
-            0)?;
-        data.index_allocation = Some(index_buffer_memory);
-        let index_buffer_memory = allocator.get_allocation_info(&index_buffer_memory).device_memory;
-        data.index_buffer = index_buffer;
-        data.index_buffer_memory = index_buffer_memory;
+    // Create Index
+    let (index_buffer, index_buffer_memory) = create_buffer(
+        data,
+        size,
+        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER, 
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        vk_mem::AllocationCreateFlags::empty(),
+        allocator,
+        0)?;
+    data.index_allocation = Some(index_buffer_memory);
+    let index_buffer_memory = allocator.get_allocation_info(&index_buffer_memory).device_memory;
+    data.index_buffer = index_buffer;
+    data.index_buffer_memory = index_buffer_memory;
 
-        // Copy Index
-        copy_buffer(device, data, staging_buffer, index_buffer, size)?;
+    // Copy Index
+    copy_buffer(device, data, staging_buffer, index_buffer, size)?;
 
-        // Cleanup
-        unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
-    // }
+    // Cleanup
+    unsafe { allocator.destroy_buffer(staging_buffer, &mut staging_buffer_memory) };
+
     Ok(())
 }
 
@@ -1404,6 +1316,11 @@ pub fn create_descriptor_pool(device: &Device, data: &mut EngineData) -> Result<
 
 pub fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> Result<()> {
     // Allocate
+    // let layouts = ().map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
+    // let info = vk::DescriptorSetAllocateInfo::default()
+        // .descriptor_pool(data.descriptor_pool)
+        // .set_layouts(&layouts);
+
     for i in 0..MAX_OBJECTS {
 
         let layouts = (0..data.game_objects.len()).map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
@@ -1705,73 +1622,3 @@ pub fn end_single_time_commands(device: &Device, data: &EngineData, command_buff
 
     Ok(())
 }
-
-//====================
-// Loading Models
-//====================
-
-/*
-Possible expansions
-gLTF?
-    Could possibly suit some usecase, would have to learn more about usage
-    currently goal is to just render two unique meshes with corresponding textures
-        also some way to change the texture that a mesh uses, ie not hardcoded
-        for example with voxels the mesh won't change for whole blocks but the texture will
-            so need someway to load a texture into a model instead of loading model and fetching a corresponding texture
-
-    I think for now I'll just try to implement a basic octree setup as that seem's most common, will likely be refined later
-            nope... too complicated for now
-            will implement when actually needed for anything beyond validation scale
-
-*/
-
-// struct Node {
-//     parent: *const Self,
-//     children: Vec<Self>,
-//     mesh: Mesh,
-//     matrix: Mat4,
-
-//     translation: Vec3,
-//     rotation: Quat,
-//     scale: Vec3,
-// }
-
-// impl Default for Node {
-//     fn default() -> Self {
-//         Node { 
-//             parent: null(), 
-//             children: vec![], 
-            
-//             mesh: None.unwrap(), // Not sure what to do here...
-//             matrix: glam::Mat4 { x_axis: Vec4::new(1.0, 1.0, 1.0, 1.0), y_axis: Vec4::new(1.0, 1.0, 1.0, 1.0), z_axis: Vec4::new(1.0, 1.0, 1.0, 1.0), w_axis: Vec4::new(1.0, 1.0, 1.0, 1.0) }, // Should return a basic 4*4 matrix with every value as 1.0 (f32)
-        
-//             translation: vec3(0.0, 0.0, 0.0), //...
-//             rotation: quat(1.0, 0.0, 0.0, 0.0), // Default objects should all face POSITIVE X-AXIS, can be changed to default to different axis/directions
-//             scale: vec3(1.0, 1.0, 1.0), // Decrease to shrink, increase to grow
-
-//         }
-//     }
-// }
-
-// impl Node {
-//     fn get_local_matrix(self) -> Mat4 {
-//         let rotation_translation_matrix = glam::Mat4::from_rotation_translation(self.rotation, self.translation);
-//         let scale = glam::Mat4::from_scale(self.scale);
-//         let rot_tran_scal_mat = Mat4::mul_mat4(&rotation_translation_matrix, &scale);
-//         return Mat4::mul_mat4(&self.matrix, &rot_tran_scal_mat);
-//     }
-//     fn get_global_matrix(self) -> Mat4 {
-//         let mut matrix = self.get_local_matrix();
-//         let mut current = self.parent;
-//         while let Some(parent) = current {
-//             matrix = self.get_local_matrix() * matrix;
-//             current = self.parent
-//         }
-//     }
-// }
-
-// Abandoning this approach for now, will just continue to hardcode everything and find a different object traversal approach later
-
-//... well f***... apparently cgmath is unmaintained... and this happened over the summer so its not even that I was already using an unmaint lib... time to find an alternative to switch to...
-// likely either GLAM or NALGEBRA
-// Going to switch over to GLAM, hopefully not too painful
