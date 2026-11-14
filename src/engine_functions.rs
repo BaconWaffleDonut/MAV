@@ -125,8 +125,8 @@ impl Hash for Vertex {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct UniformBufferObject {
-    pub view: Mat4,
-    pub proj: Mat4,
+    pub view: glam::Mat4,
+    pub proj: glam::Mat4,
     pub model: glam::Mat4,
 }
 
