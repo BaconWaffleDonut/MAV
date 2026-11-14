@@ -4,7 +4,7 @@ use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
 use ash::{
     Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, DescriptorSet, PhysicalDevice}};
-use cgmath::{vec2, vec3};
+// use cgmath::{vec2, vec3};
 use vk_mem::{Alloc, Allocation, Allocator, };
 use winit::{
     event_loop::ActiveEventLoop, raw_window_handle::HasDisplayHandle};
@@ -60,7 +60,7 @@ pub const MAX_FRAMES_IN_FLIGHT: usize = 3;
 
 type Vec2 = glam::Vec2;
 type Vec3 = glam::Vec3;
-type Mat4 = cgmath::Matrix4<f32>;
+// type Mat4 = cgmath::Matrix4<f32>;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
