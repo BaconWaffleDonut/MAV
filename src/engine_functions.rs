@@ -4,6 +4,7 @@ use core::ffi::c_char;
 use ahash::{AHashMap, AHashSet};
 use ash::{
     Device, Entry, Instance, ext::debug_utils, khr::{surface, swapchain}, util::read_spv, vk::{self, DescriptorSet, PhysicalDevice}};
+use glam::Mat4;
 // use cgmath::{vec2, vec3};
 use vk_mem::{Alloc, Allocation, Allocator, };
 use winit::{
@@ -160,10 +161,12 @@ impl Default for GameObject {
             rotation: Vec3::new(0.0, 0.0, 0.0), 
             scale: Vec3::new(0.0, 0.0, 0.0), 
             
+            // Uniform Buffers per object
             uniform_buffer: vec![], 
             uniform_buffer_allocation: vec![],
             uniform_buffer_memory: vec![], 
             
+            // Descriptor Sets per object
             descriptor_sets: vec![] }
     }
 }
@@ -177,7 +180,7 @@ pub fn setupGameObjects(data: &mut EngineData) {
 
     game_objects[1].position = Vec3::new(1.0, 1.0, 2.0);
     game_objects[1].rotation = Vec3::new(2.0, 1.0, 45.0);
-    game_objects[1].scale = Vec3::new(0.5, 2.0, 1.0);
+    game_objects[1].scale = Vec3::new(0.5, 0.0, 1.0);
 
     game_objects[2].position = Vec3::new(0.0, 3.0, 0.0);
     game_objects[2].rotation = Vec3::new(0.0, 15.0, 0.0);
@@ -1002,10 +1005,11 @@ pub fn generate_mipmaps(instance: &Instance, device: &Device, data: &EngineData,
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .subresource_range(subresource);
-        let mut mip_width = 512;
-        let mut mip_height = 512;
+        let mut mip_width = data.swapchain_extent.width;
+        let mut mip_height = data.swapchain_extent.height;
 
         for i in 1..mip_levels {
+            println!("Generating mip level: {}", i);
             barrier.subresource_range.base_mip_level = i - 1;
             barrier.old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
             barrier.new_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
@@ -1263,10 +1267,7 @@ pub fn create_index_buffer(instance: &Instance, device: &Device, data: &mut Engi
 }
 
 pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut EngineData, allocator: &Allocator) -> Result<()> {
-    let game_objects = &mut data.game_objects;
-    for i in 0..game_objects.len(){
-        // data.uniform_buffers.clear();
-        // data.uniform_buffers_memory.clear();
+    for i in 0..data.game_objects.len(){
         data.game_objects[i].uniform_buffer.clear();
         data.game_objects[i].uniform_buffer_memory.clear();
         data.game_objects[i].uniform_buffer_allocation.clear();
@@ -1298,15 +1299,15 @@ pub fn create_uniform_buffers(instance: &Instance, device: &Device, data: &mut E
 pub fn create_descriptor_pool(device: &Device, data: &mut EngineData) -> Result<()> {
     let ubo_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::UNIFORM_BUFFER)
-        .descriptor_count((data.swapchain_images.len() * MAX_OBJECTS).try_into().unwrap());
+        .descriptor_count((data.swapchain_images.len() * data.game_objects.len()).try_into().unwrap());
     let sampler_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count((data.swapchain_images.len() * MAX_OBJECTS).try_into().unwrap());
+        .descriptor_count((data.swapchain_images.len() * data.game_objects.len()).try_into().unwrap());
 
     let pool_sizes = &[ubo_size, sampler_size];
     let info = vk::DescriptorPoolCreateInfo::default()
         .pool_sizes(pool_sizes)
-        .max_sets((data.swapchain_images.len() * MAX_OBJECTS).try_into().unwrap())
+        .max_sets((data.swapchain_images.len() * data.game_objects.len()).try_into().unwrap())
         .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
 
     data.descriptor_pool = unsafe { device.create_descriptor_pool(&info, None) }?;
@@ -1321,7 +1322,7 @@ pub fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> Result<
         // .descriptor_pool(data.descriptor_pool)
         // .set_layouts(&layouts);
 
-    for i in 0..MAX_OBJECTS {
+    for i in 0..data.game_objects.len() {
 
         let layouts = (0..data.game_objects.len()).map(|_| data.descriptor_set_layout).collect::<Vec<_>>();
         let info = vk::DescriptorSetAllocateInfo::default()

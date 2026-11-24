@@ -4,6 +4,7 @@ use std::result::Result::Ok;
 use anyhow::{anyhow, Result};
 use ash::khr::surface;
 use ash::vk::DeviceMemory;
+use glam::Mat4;
 // use cgmath::num_traits::ToPrimitive;
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 use winit::dpi::PhysicalSize;
@@ -409,7 +410,7 @@ impl Engine {
 
 
         // let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, Deg(1.0) );
-        let model = glam::Mat4::from_translation(position) * glam::Mat4::from_axis_angle(rotation, 0.0);
+        let model = glam::Mat4::from_translation(position) * glam::Mat4::from_axis_angle(rotation, PI / 180.0);
         let model_bytes = unsafe { std::slice::from_raw_parts(&model as *const glam::Mat4 as *const u8, size_of::<glam::Mat4>()) };
         let opacity = 1 as f32;
         let opacity_bytes = &opacity.to_ne_bytes()[..];
@@ -482,7 +483,7 @@ impl Engine {
             let position = self.data.game_objects[i].position;
             let rotation = self.data.game_objects[i].rotation;
 
-            let model = glam::Mat4::from_translation(position) * glam::Mat4::from_axis_angle(rotation, 0.0 );
+            let model = Mat4::from_translation(position) * Mat4::from_axis_angle(rotation, 0.0);
 
             let ubo = UniformBufferObject { view, proj, model };
             
